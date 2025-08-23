@@ -20,11 +20,13 @@ class TestCalibreService(unittest.TestCase):
             'library': 'test_library'
         }
         self.logger_mock = MagicMock(spec=get_logger)
-        self.calibre_service = CalibreService(self.config_mock, self.logger_mock)
+        self.calibre_service = CalibreService(self.config_mock,
+                                              self.logger_mock)
 
     def test_init(self):
         """Test initialization of CalibreService."""
-        self.assertEqual(self.calibre_service.base_url, 'http://localhost:8080')
+        self.assertEqual(self.calibre_service.base_url,
+                         'http://localhost:8080')
         self.assertEqual(self.calibre_service.username, 'test_user')
         self.assertEqual(self.calibre_service.password, 'test_pass')
         self.assertEqual(self.calibre_service.library, 'test_library')
@@ -40,14 +42,15 @@ class TestCalibreService(unittest.TestCase):
         self.assertTrue(result)
         mock_get.assert_called_once_with(
             f'{self.calibre_service.base_url}/ajax/library-info',
-            auth=(self.calibre_service.username, self.calibre_service.password),
-            timeout=10
-        )
+            auth=(self.calibre_service.username,
+                  self.calibre_service.password),
+            timeout=10)
 
     @patch('services.calibre_service.requests.get')
     def test_test_connection_failure(self, mock_get):
         """Test failed connection to Calibre server."""
-        mock_get.side_effect = requests.exceptions.RequestException("Connection error")
+        mock_get.side_effect = requests.exceptions.RequestException(
+            "Connection error")
 
         result = self.calibre_service.test_connection()
         self.assertFalse(result)
@@ -66,7 +69,12 @@ class TestCalibreService(unittest.TestCase):
             'base_url': '/ajax/books',
             'query': 'title:"Test Book"',
             'book_ids': [1],
-            'vl': {'1': {'title': 'Test Book', 'authors': ['Test Author']}}
+            'vl': {
+                '1': {
+                    'title': 'Test Book',
+                    'authors': ['Test Author']
+                }
+            }
         }
         mock_get.return_value = mock_response
 
@@ -90,7 +98,12 @@ class TestCalibreService(unittest.TestCase):
             'base_url': '/ajax/books',
             'query': 'authors:"Test Author"',
             'book_ids': [1],
-            'vl': {'1': {'title': 'Test Book', 'authors': ['Test Author']}}
+            'vl': {
+                '1': {
+                    'title': 'Test Book',
+                    'authors': ['Test Author']
+                }
+            }
         }
         mock_get.return_value = mock_response
 
@@ -114,7 +127,15 @@ class TestCalibreService(unittest.TestCase):
             'base_url': '/ajax/books',
             'query': 'identifiers:isbn:1234567890',
             'book_ids': [1],
-            'vl': {'1': {'title': 'Test Book', 'authors': ['Test Author'], 'identifiers': {'isbn': '1234567890'}}}
+            'vl': {
+                '1': {
+                    'title': 'Test Book',
+                    'authors': ['Test Author'],
+                    'identifiers': {
+                        'isbn': '1234567890'
+                    }
+                }
+            }
         }
         mock_get.return_value = mock_response
 
@@ -133,7 +154,9 @@ class TestCalibreService(unittest.TestCase):
             'book_id': 1,
             'title': 'Test Book',
             'authors': ['Test Author'],
-            'identifiers': {'isbn': '1234567890'},
+            'identifiers': {
+                'isbn': '1234567890'
+            },
             'formats': ['EPUB', 'PDF']
         }
         mock_get.return_value = mock_response
@@ -147,33 +170,49 @@ class TestCalibreService(unittest.TestCase):
 
     def test_find_best_match_exact_title_author(self):
         """Test finding best match with exact title and author."""
-        books = [
-            {'title': 'Test Book', 'authors': ['Test Author'], 'id': 1},
-            {'title': 'Another Book', 'authors': ['Another Author'], 'id': 2}
-        ]
+        books = [{
+            'title': 'Test Book',
+            'authors': ['Test Author'],
+            'id': 1
+        }, {
+            'title': 'Another Book',
+            'authors': ['Another Author'],
+            'id': 2
+        }]
 
-        best_match = self.calibre_service.find_best_match(books, 'Test Book', 'Test Author')
+        best_match = self.calibre_service.find_best_match(
+            books, 'Test Book', 'Test Author')
         self.assertEqual(best_match['id'], 1)
 
     def test_find_best_match_similar_title(self):
         """Test finding best match with similar title."""
-        books = [
-            {'title': 'Test Book', 'authors': ['Test Author'], 'id': 1},
-            {'title': 'Test Book: Extended Edition', 'authors': ['Test Author'], 'id': 2}
-        ]
+        books = [{
+            'title': 'Test Book',
+            'authors': ['Test Author'],
+            'id': 1
+        }, {
+            'title': 'Test Book: Extended Edition',
+            'authors': ['Test Author'],
+            'id': 2
+        }]
 
-        best_match = self.calibre_service.find_best_match(books, 'Test Book Extended', 'Test Author')
+        best_match = self.calibre_service.find_best_match(
+            books, 'Test Book Extended', 'Test Author')
         self.assertEqual(best_match['id'], 2)
 
     def test_string_similarity(self):
         """Test string similarity calculation."""
         similarity = self.calibre_service._string_similarity('Test', 'test')
-        self.assertGreaterEqual(similarity, 0.9)  # Should be very similar despite case
+        self.assertGreaterEqual(similarity,
+                                0.9)  # Should be very similar despite case
 
-        similarity = self.calibre_service._string_similarity('Test Book', 'Test Book: Extended Edition')
-        self.assertGreaterEqual(similarity, 0.5)  # Should have moderate similarity
+        similarity = self.calibre_service._string_similarity(
+            'Test Book', 'Test Book: Extended Edition')
+        self.assertGreaterEqual(similarity,
+                                0.5)  # Should have moderate similarity
 
-        similarity = self.calibre_service._string_similarity('Test Book', 'Completely Different')
+        similarity = self.calibre_service._string_similarity(
+            'Test Book', 'Completely Different')
         self.assertLessEqual(similarity, 0.3)  # Should have low similarity
 
     @patch('services.calibre_service.requests.post')
@@ -184,7 +223,8 @@ class TestCalibreService(unittest.TestCase):
         mock_response.json.return_value = {'book_id': 1}
         mock_post.return_value = mock_response
 
-        book_id = self.calibre_service.upload_book('/path/to/book.epub', 'Test Book', 'Test Author')
+        book_id = self.calibre_service.upload_book('/path/to/book.epub',
+                                                   'Test Book', 'Test Author')
         self.assertEqual(book_id, 1)
         mock_post.assert_called_once()
 

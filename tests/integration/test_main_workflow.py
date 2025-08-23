@@ -27,12 +27,12 @@ class TestMainWorkflow(unittest.TestCase):
         cls.download_dir = os.path.join(cls.temp_dir, 'downloads')
         cls.temp_data_dir = os.path.join(cls.temp_dir, 'temp')
         cls.log_dir = os.path.join(cls.temp_dir, 'logs')
-        
+
         # Create directories
         os.makedirs(cls.download_dir, exist_ok=True)
         os.makedirs(cls.temp_data_dir, exist_ok=True)
         os.makedirs(cls.log_dir, exist_ok=True)
-        
+
         # Create a temporary config file
         cls.config_file = os.path.join(cls.temp_dir, 'config.yaml')
         with open(cls.config_file, 'w', encoding='utf-8') as f:
@@ -76,13 +76,14 @@ class TestMainWorkflow(unittest.TestCase):
               max_retries: 3
               retry_delay: 5
             ''')
-        
+
         # Setup logger
-        cls.logger = setup_logger('test_logger', os.path.join(cls.log_dir, 'test.log'))
-        
+        cls.logger = setup_logger('test_logger',
+                                  os.path.join(cls.log_dir, 'test.log'))
+
         # Create config manager
         cls.config_manager = ConfigManager(cls.config_file)
-        
+
         # Create database
         cls.database = Database(cls.config_manager, cls.logger)
         Base.metadata.create_all(cls.database.engine)
@@ -93,7 +94,7 @@ class TestMainWorkflow(unittest.TestCase):
         # Close database session
         if hasattr(cls, 'database') and cls.database.session:
             cls.database.close_session()
-        
+
         # Remove temporary directory and all its contents
         if hasattr(cls, 'temp_dir') and os.path.exists(cls.temp_dir):
             shutil.rmtree(cls.temp_dir)
@@ -105,7 +106,7 @@ class TestMainWorkflow(unittest.TestCase):
         self.zlibrary_service = MagicMock(spec=ZLibraryService)
         self.calibre_service = MagicMock(spec=CalibreService)
         self.lark_service = MagicMock(spec=LarkService)
-        
+
         # Clear database tables
         session = self.database.get_session()
         session.query(DownloadRecord).delete()
@@ -117,49 +118,53 @@ class TestMainWorkflow(unittest.TestCase):
         """Test the main workflow from Douban to Z-Library to Calibre."""
         # Setup mock data
         # 1. Mock Douban books
-        mock_douban_books = [
-            {
-                'douban_id': '12345',
-                'title': 'Test Book 1',
-                'author': 'Test Author 1',
-                'publisher': 'Test Publisher 1',
-                'isbn': '1234567890',
-                'url': 'http://douban.com/book/12345',
-                'cover_url': 'http://douban.com/covers/12345.jpg'
-            },
-            {
-                'douban_id': '67890',
-                'title': 'Test Book 2',
-                'author': 'Test Author 2',
-                'publisher': 'Test Publisher 2',
-                'isbn': '0987654321',
-                'url': 'http://douban.com/book/67890',
-                'cover_url': 'http://douban.com/covers/67890.jpg'
-            }
-        ]
-        
+        mock_douban_books = [{
+            'douban_id': '12345',
+            'title': 'Test Book 1',
+            'author': 'Test Author 1',
+            'publisher': 'Test Publisher 1',
+            'isbn': '1234567890',
+            'url': 'http://douban.com/book/12345',
+            'cover_url': 'http://douban.com/covers/12345.jpg'
+        }, {
+            'douban_id': '67890',
+            'title': 'Test Book 2',
+            'author': 'Test Author 2',
+            'publisher': 'Test Publisher 2',
+            'isbn': '0987654321',
+            'url': 'http://douban.com/book/67890',
+            'cover_url': 'http://douban.com/covers/67890.jpg'
+        }]
+
         # 2. Mock Z-Library search results
-        mock_zlib_results = [
-            {
-                'title': 'Test Book 1',
-                'author': 'Test Author 1',
-                'publisher': 'Test Publisher 1',
-                'year': '2023',
-                'language': 'English',
-                'format': 'PDF',
-                'size': '2.5 MB',
-                'download_url': 'http://zlibrary.example/download/12345',
-                'cover_url': 'http://zlibrary.example/covers/12345.jpg'
-            }
-        ]
-        
+        mock_zlib_results = [{
+            'title':
+            'Test Book 1',
+            'author':
+            'Test Author 1',
+            'publisher':
+            'Test Publisher 1',
+            'year':
+            '2023',
+            'language':
+            'English',
+            'format':
+            'PDF',
+            'size':
+            '2.5 MB',
+            'download_url':
+            'http://zlibrary.example/download/12345',
+            'cover_url':
+            'http://zlibrary.example/covers/12345.jpg'
+        }]
+
         # 3. Mock Calibre search results
         mock_calibre_results = []
-        
+
         # Configure mocks
         # 1. Douban Scraper
         self.douban_scraper.get_wishlist.return_value = mock_douban_books
-        
+
         # 2. Z-Library Service
         self.zlibrary_service.test_connection.return_value = True
         self.zlibrary_service.search_books.return_value = mock_zlib_results
@@ -169,65 +174,66 @@ class TestMainWorkflow(unittest.TestCase):
             'format': 'PDF',
             'file_size': 2621440  # 2.5 MB in bytes
         }
-        
+
         # 3. Calibre Service
         self.calibre_service.test_connection.return_value = True
         self.calibre_service.search_books.return_value = mock_calibre_results  # Empty, book not in Calibre yet
         self.calibre_service.upload_book.return_value = 1  # Calibre book ID
-        
+
         # 4. Lark Service
         self.lark_service.send_book_download_notification.return_value = True
         self.lark_service.send_sync_task_summary.return_value = True
-        
+
         # Execute workflow
         # 1. Fetch books from Douban
         douban_books = self.douban_scraper.get_wishlist()
         self.assertEqual(len(douban_books), 2)
-        
+
         # 2. Add books to database
         added_books = []
         for book_data in douban_books:
-            book = DoubanBook(
-                douban_id=book_data['douban_id'],
-                title=book_data['title'],
-                author=book_data['author'],
-                publisher=book_data['publisher'],
-                isbn=book_data['isbn'],
-                url=book_data['url'],
-                cover_url=book_data['cover_url'],
-                status=BookStatus.PENDING
-            )
+            book = DoubanBook(douban_id=book_data['douban_id'],
+                              title=book_data['title'],
+                              author=book_data['author'],
+                              publisher=book_data['publisher'],
+                              isbn=book_data['isbn'],
+                              url=book_data['url'],
+                              cover_url=book_data['cover_url'],
+                              status=BookStatus.PENDING)
             added_book = self.database.add_douban_book(book)
             added_books.append(added_book)
-        
+
         # Verify books were added to database
         session = self.database.get_session()
         db_books = session.query(DoubanBook).all()
         self.assertEqual(len(db_books), 2)
-        
+
         # 3. Process each book
         for book in added_books:
             # 3.1 Check if book exists in Calibre
-            calibre_books = self.calibre_service.search_books(title=book.title, author=book.author)
+            calibre_books = self.calibre_service.search_books(
+                title=book.title, author=book.author)
             if calibre_books:  # Book already in Calibre
                 book.status = BookStatus.IN_CALIBRE
                 self.database.update_douban_book(book)
                 continue
-            
+
             # 3.2 Search Z-Library for the book
-            zlib_results = self.zlibrary_service.search_books(title=book.title, author=book.author)
+            zlib_results = self.zlibrary_service.search_books(
+                title=book.title, author=book.author)
             if not zlib_results:  # Book not found in Z-Library
                 book.status = BookStatus.NOT_FOUND
                 self.database.update_douban_book(book)
                 continue
-            
+
             # 3.3 Download the book from Z-Library
-            download_result = self.zlibrary_service.download_book(zlib_results[0]['download_url'])
+            download_result = self.zlibrary_service.download_book(
+                zlib_results[0]['download_url'])
             if not download_result['success']:  # Download failed
                 book.status = BookStatus.DOWNLOAD_FAILED
                 self.database.update_douban_book(book)
                 continue
-            
+
             # 3.4 Add download record
             download_record = DownloadRecord(
                 book_id=book.id,
@@ -235,25 +241,23 @@ class TestMainWorkflow(unittest.TestCase):
                 format=download_result['format'],
                 file_path=download_result['file_path'],
                 file_size=download_result['file_size'],
-                success=True
-            )
+                success=True)
             self.database.add_download_record(download_record)
-            
+
             # 3.5 Upload to Calibre
             calibre_id = self.calibre_service.upload_book(
                 file_path=download_result['file_path'],
                 title=book.title,
-                author=book.author
-            )
-            
+                author=book.author)
+
             if calibre_id:  # Upload successful
                 book.calibre_id = calibre_id
                 book.status = BookStatus.IN_CALIBRE
             else:  # Upload failed
                 book.status = BookStatus.UPLOAD_FAILED
-            
+
             self.database.update_douban_book(book)
-            
+
             # 3.6 Send notification
             self.lark_service.send_book_download_notification(
                 title=book.title,
@@ -264,9 +268,8 @@ class TestMainWorkflow(unittest.TestCase):
                 file_size=download_result['file_size'],
                 cover_url=book.cover_url,
                 douban_url=book.url,
-                calibre_id=calibre_id
-            )
-        
+                calibre_id=calibre_id)
+
         # Verify final state
         # 1. Check book status in database
         updated_books = session.query(DoubanBook).all()
@@ -276,17 +279,19 @@ class TestMainWorkflow(unittest.TestCase):
                 self.assertEqual(book.calibre_id, 1)
             elif book.title == 'Test Book 2':  # This book should not be found in Z-Library
                 self.assertEqual(book.status, BookStatus.NOT_FOUND)
-        
+
         # 2. Check download records
         download_records = session.query(DownloadRecord).all()
-        self.assertEqual(len(download_records), 1)  # Only one book should be downloaded
+        self.assertEqual(len(download_records),
+                         1)  # Only one book should be downloaded
         self.assertEqual(download_records[0].format, 'PDF')
         self.assertTrue(download_records[0].success)
-        
+
         # 3. Verify service calls
         self.douban_scraper.get_wishlist.assert_called_once()
         self.zlibrary_service.search_books.assert_called()
-        self.zlibrary_service.download_book.assert_called_once_with(mock_zlib_results[0]['download_url'])
+        self.zlibrary_service.download_book.assert_called_once_with(
+            mock_zlib_results[0]['download_url'])
         self.calibre_service.upload_book.assert_called_once()
         self.lark_service.send_book_download_notification.assert_called_once()
 
