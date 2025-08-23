@@ -122,10 +122,8 @@ class ConfigManager:
             db_path = Path(db_config['path'])
             # 确保路径是绝对路径
             if not db_path.is_absolute():
-                db_path = Path(
-                    os.path.dirname(
-                        os.path.abspath(
-                            self.config_path.as_posix()))) / db_path
+                config_dir = self.config_path.resolve().parent
+                db_path = config_dir / db_path
             return f"sqlite:///{db_path}"
         else:  # postgresql
             return f"postgresql://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['dbname']}"
@@ -193,9 +191,8 @@ class ConfigManager:
         """
         download_dir = Path(self.config['zlibrary']['download_dir'])
         if not download_dir.is_absolute():
-            download_dir = Path(
-                os.path.dirname(os.path.abspath(
-                    self.config_path.as_posix()))) / download_dir
+            config_dir = self.config_path.resolve().parent
+            download_dir = config_dir / download_dir
         return download_dir
 
     def get_temp_dir(self) -> Path:
@@ -207,7 +204,6 @@ class ConfigManager:
         """
         temp_dir = Path(self.config['system']['temp_dir'])
         if not temp_dir.is_absolute():
-            temp_dir = Path(
-                os.path.dirname(os.path.abspath(
-                    self.config_path.as_posix()))) / temp_dir
+            config_dir = self.config_path.resolve().parent
+            temp_dir = config_dir / temp_dir
         return temp_dir

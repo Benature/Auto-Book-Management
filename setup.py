@@ -83,8 +83,8 @@ def init_database():
             db_path = db_config["path"]
             # 确保路径是绝对路径
             if not os.path.isabs(db_path):
-                db_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), db_path)
+                setup_dir = Path(__file__).resolve().parent
+                db_path = str(setup_dir / db_path)
             db_url = f"sqlite:///{db_path}"
         else:  # postgresql
             db_url = f"postgresql://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
@@ -95,7 +95,8 @@ def init_database():
     # 初始化数据库
     try:
         # 动态导入模型，避免循环导入
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
         from db.models import Base
 
         # 创建数据库引擎和表

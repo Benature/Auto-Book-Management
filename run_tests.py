@@ -43,7 +43,8 @@ def run_integration_tests():
 
 if __name__ == '__main__':
     # 确保当前工作目录是项目根目录
-    project_root = os.path.dirname(os.path.abspath(__file__))
+    FILE_DIR = Path(__file__).resolve().parent
+    project_root = FILE_DIR
     os.chdir(project_root)
 
     # 添加项目根目录到 Python 路径

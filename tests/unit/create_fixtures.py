@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 
 # 获取当前文件所在目录
-current_dir = Path(__file__).parent
-fixtures_dir = current_dir / 'fixtures'
+FILE_DIR = Path(__file__).resolve().parent
+fixtures_dir = FILE_DIR / 'fixtures'
 
 # 创建fixtures目录
 fixtures_dir.mkdir(exist_ok=True)
