@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 """
 运行所有测试的脚本
 
@@ -46,10 +45,10 @@ if __name__ == '__main__':
     # 确保当前工作目录是项目根目录
     project_root = os.path.dirname(os.path.abspath(__file__))
     os.chdir(project_root)
-    
+
     # 添加项目根目录到 Python 路径
     sys.path.insert(0, project_root)
-    
+
     # 根据命令行参数决定运行哪些测试
     if len(sys.argv) > 1:
         test_type = sys.argv[1].lower()
@@ -63,6 +62,6 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         success = run_all_tests()
-    
+
     # 根据测试结果设置退出码
     sys.exit(0 if success else 1)

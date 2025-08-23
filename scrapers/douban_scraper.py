@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 """
 豆瓣爬虫
 
@@ -20,8 +19,11 @@ from db.models import BookStatus
 
 class DoubanScraper:
     """豆瓣爬虫类"""
-    
-    def __init__(self, cookie: str, user_agent: str = None, max_pages: int = 0):
+
+    def __init__(self,
+                 cookie: str,
+                 user_agent: str = None,
+                 max_pages: int = 0):
         """
         初始化爬虫
         
@@ -33,15 +35,16 @@ class DoubanScraper:
         self.logger = get_logger("douban_scraper")
         self.cookie = cookie
         self.max_pages = max_pages
-        
+
         self.headers = {
-            'User-Agent': user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': user_agent or
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Cookie': cookie
         }
         self.base_url = "https://book.douban.com/people/me/wish"
         self.session = requests.Session()
         self.session.headers.update(self.headers)
-    
+
     def get_wish_list(self) -> List[Dict[str, Any]]:
         """
         获取「想读」书单
@@ -53,51 +56,51 @@ class DoubanScraper:
         books = []
         page = 0
         has_next = True
-        
+
         while has_next and (self.max_pages == 0 or page < self.max_pages):
             page += 1
             url = f"{self.base_url}?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
             self.logger.info(f"爬取第 {page} 页: {url}")
-            
+
             try:
                 response = self.session.get(url, timeout=10)
                 response.raise_for_status()
-                
+
                 # 检查是否需要登录
                 if "你需要登录才能使用此功能" in response.text:
                     self.logger.error("豆瓣 Cookie 无效或已过期，需要重新登录")
                     break
-                
+
                 soup = BeautifulSoup(response.text, 'lxml')
                 items = soup.select('.subject-item')
-                
+
                 if not items:
                     self.logger.info(f"第 {page} 页没有找到书籍，爬取结束")
                     has_next = False
                     break
-                
+
                 for item in items:
                     book_info = self.parse_book_info(item)
                     if book_info:
                         books.append(book_info)
-                
+
                 # 检查是否有下一页
                 next_link = soup.select_one('span.next a')
                 has_next = next_link is not None
-                
+
                 # 避免请求过于频繁
                 time.sleep(2)
-                
+
             except requests.RequestException as e:
                 self.logger.error(f"请求失败: {str(e)}")
                 break
             except Exception as e:
                 self.logger.error(f"爬取过程中出错: {str(e)}")
                 break
-        
+
         self.logger.info(f"爬取完成，共获取 {len(books)} 本书")
         return books
-    
+
     def parse_book_info(self, item) -> Optional[Dict[str, Any]]:
         """
         解析书籍信息
@@ -113,21 +116,21 @@ class DoubanScraper:
             title_element = item.select_one('div.info h2 a')
             if not title_element:
                 return None
-            
+
             title = title_element.get_text(strip=True)
             douban_url = title_element['href']
             douban_id = re.search(r'/subject/(\d+)/', douban_url).group(1)
-            
+
             # 获取作者、出版社等信息
             pub_element = item.select_one('div.pub')
             pub_text = pub_element.get_text(strip=True) if pub_element else ''
-            
+
             # 尝试解析作者、译者、出版社、出版日期
             author = ''
             translator = ''
             publisher = ''
             publish_date = ''
-            
+
             if pub_text:
                 # 通常格式为: 作者 / 译者 / 出版社 / 出版日期
                 parts = [p.strip() for p in pub_text.split('/')]
@@ -140,15 +143,16 @@ class DoubanScraper:
                     publisher = parts[-2]
                 if len(parts) >= 3:
                     publish_date = parts[-1]
-            
+
             # 获取评分
             rating_element = item.select_one('span.rating_nums')
-            rating = float(rating_element.get_text(strip=True)) if rating_element else None
-            
+            rating = float(rating_element.get_text(
+                strip=True)) if rating_element else None
+
             # 获取封面图片
             cover_element = item.select_one('div.pic img')
             cover_url = cover_element['src'] if cover_element else ''
-            
+
             # 构建书籍信息字典
             book_info = {
                 'title': title,
@@ -162,18 +166,18 @@ class DoubanScraper:
                 'cover_url': cover_url,
                 'status': BookStatus.NEW
             }
-            
+
             # 获取详细信息（ISBN 等）
             detailed_info = self.get_book_detail(douban_id)
             if detailed_info:
                 book_info.update(detailed_info)
-            
+
             return book_info
-            
+
         except Exception as e:
             self.logger.error(f"解析书籍信息失败: {str(e)}")
             return None
-    
+
     def get_book_detail(self, douban_id: str) -> Optional[Dict[str, Any]]:
         """
         获取书籍详细信息
@@ -189,48 +193,49 @@ class DoubanScraper:
             self.logger.debug(f"获取书籍详情: {url}")
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            
+
             soup = BeautifulSoup(response.text, 'lxml')
-            
+
             # 获取 ISBN
             isbn = ''
-            info_text = soup.select_one('#info').get_text() if soup.select_one('#info') else ''
+            info_text = soup.select_one('#info').get_text() if soup.select_one(
+                '#info') else ''
             isbn_match = re.search(r'ISBN:\s*(\d+)', info_text)
             if isbn_match:
                 isbn = isbn_match.group(1)
-            
+
             # 获取原作名
             original_title = ''
             original_title_match = re.search(r'原作名:\s*([^\n]+)', info_text)
             if original_title_match:
                 original_title = original_title_match.group(1).strip()
-            
+
             # 获取副标题
             subtitle = ''
             subtitle_match = re.search(r'副标题:\s*([^\n]+)', info_text)
             if subtitle_match:
                 subtitle = subtitle_match.group(1).strip()
-            
+
             # 获取内容简介
             description = ''
             intro_element = soup.select_one('div.intro')
             if intro_element:
                 description = intro_element.get_text(strip=True)
-            
+
             # 避免请求过于频繁
             time.sleep(1)
-            
+
             return {
                 'isbn': isbn,
                 'original_title': original_title,
                 'subtitle': subtitle,
                 'description': description
             }
-            
+
         except Exception as e:
             self.logger.error(f"获取书籍详情失败: {str(e)}")
             return None
-    
+
     def run(self) -> List[Dict[str, Any]]:
         """
         执行爬虫任务
@@ -240,11 +245,12 @@ class DoubanScraper:
         """
         self.logger.info("开始执行豆瓣爬虫任务")
         start_time = time.time()
-        
+
         try:
             books = self.get_wish_list()
             elapsed_time = time.time() - start_time
-            self.logger.info(f"爬虫任务完成，耗时 {elapsed_time:.2f} 秒，获取 {len(books)} 本书")
+            self.logger.info(
+                f"爬虫任务完成，耗时 {elapsed_time:.2f} 秒，获取 {len(books)} 本书")
             return books
         except Exception as e:
             elapsed_time = time.time() - start_time

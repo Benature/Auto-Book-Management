@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 """
 日志工具
 
@@ -15,8 +14,10 @@ from logging.handlers import TimedRotatingFileHandler
 from typing import Optional
 
 
-def setup_logger(log_level: int = logging.INFO, log_file: Optional[str] = None, 
-                console: bool = True, retention_days: int = 30) -> logging.Logger:
+def setup_logger(log_level: int = logging.INFO,
+                 log_file: Optional[str] = None,
+                 console: bool = True,
+                 retention_days: int = 30) -> logging.Logger:
     """
     设置日志记录器
     
@@ -33,37 +34,34 @@ def setup_logger(log_level: int = logging.INFO, log_file: Optional[str] = None,
     logger = logging.getLogger("douban_zlib")
     logger.setLevel(log_level)
     logger.handlers = []  # 清除已有的处理器
-    
+
     # 设置日志格式
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    
+        datefmt="%Y-%m-%d %H:%M:%S")
+
     # 添加文件处理器
     if log_file:
         # 确保日志目录存在
         log_dir = os.path.dirname(log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        
+
         # 使用 TimedRotatingFileHandler 进行日志轮转
-        file_handler = TimedRotatingFileHandler(
-            log_file,
-            when="midnight",
-            interval=1,
-            backupCount=retention_days,
-            encoding="utf-8"
-        )
+        file_handler = TimedRotatingFileHandler(log_file,
+                                                when="midnight",
+                                                interval=1,
+                                                backupCount=retention_days,
+                                                encoding="utf-8")
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-    
+
     # 添加控制台处理器
     if console:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
-    
+
     return logger
 
 
@@ -82,7 +80,9 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
     return logging.getLogger("douban_zlib")
 
 
-def log_exception(logger: logging.Logger, e: Exception, context: str = "") -> None:
+def log_exception(logger: logging.Logger,
+                  e: Exception,
+                  context: str = "") -> None:
     """
     记录异常信息
     

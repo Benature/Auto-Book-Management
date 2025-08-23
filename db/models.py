@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-
 """
 数据库模型
 
@@ -29,7 +28,7 @@ class BookStatus(enum.Enum):
 class DoubanBook(Base):
     """豆瓣书籍数据模型"""
     __tablename__ = 'douban_books'
-    
+
     id = Column(Integer, primary_key=True)
     title = Column(String(255), nullable=False, index=True)
     subtitle = Column(String(255))
@@ -47,10 +46,12 @@ class DoubanBook(Base):
     status = Column(Enum(BookStatus), default=BookStatus.NEW, index=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
+
     # 关联关系
-    download_records = relationship("DownloadRecord", back_populates="book", cascade="all, delete-orphan")
-    
+    download_records = relationship("DownloadRecord",
+                                    back_populates="book",
+                                    cascade="all, delete-orphan")
+
     def __repr__(self):
         return f"<DoubanBook(id={self.id}, title='{self.title}', author='{self.author}', status='{self.status.value if self.status else 'None'}')>"
 
@@ -58,7 +59,7 @@ class DoubanBook(Base):
 class DownloadRecord(Base):
     """下载记录数据模型"""
     __tablename__ = 'download_records'
-    
+
     id = Column(Integer, primary_key=True)
     book_id = Column(Integer, ForeignKey('douban_books.id'), nullable=False)
     zlibrary_id = Column(String(50))
@@ -71,10 +72,10 @@ class DownloadRecord(Base):
     error_message = Column(Text)  # 错误信息
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
+
     # 关联关系
     book = relationship("DoubanBook", back_populates="download_records")
-    
+
     def __repr__(self):
         return f"<DownloadRecord(id={self.id}, book_id={self.book_id}, format='{self.file_format}', status='{self.status}')>"
 
@@ -82,7 +83,7 @@ class DownloadRecord(Base):
 class SyncTask(Base):
     """同步任务数据模型"""
     __tablename__ = 'sync_tasks'
-    
+
     id = Column(Integer, primary_key=True)
     start_time = Column(DateTime, default=datetime.now)
     end_time = Column(DateTime)
@@ -94,6 +95,6 @@ class SyncTask(Base):
     books_uploaded = Column(Integer, default=0)
     books_failed = Column(Integer, default=0)
     error_message = Column(Text)
-    
+
     def __repr__(self):
         return f"<SyncTask(id={self.id}, status='{self.status}', start_time='{self.start_time}')>"

@@ -13,7 +13,7 @@ lxml>=4.9.1
 # 数据库
 sqlalchemy>=1.4.41
 alembic>=1.8.1
-psycopg2-binary>=2.9.5  # PostgreSQL 支持（可选）
+# psycopg2-binary>=2.9.5  # PostgreSQL 支持（可选）
 
 # 调度系统
 apscheduler>=3.9.1
