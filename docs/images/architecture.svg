@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- 背景 -->
+  <rect width="800" height="600" fill="#f8f9fa" />
+  
+  <!-- 标题 -->
+  <text x="400" y="40" font-family="Arial" font-size="24" text-anchor="middle" font-weight="bold">豆瓣书单同步与 Calibre 集成自动化 - 系统架构</text>
+  
+  <!-- 数据源 -->
+  <rect x="50" y="100" width="120" height="60" rx="10" ry="10" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+  <text x="110" y="135" font-family="Arial" font-size="16" text-anchor="middle">豆瓣书单</text>
+  
+  <rect x="50" y="300" width="120" height="60" rx="10" ry="10" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+  <text x="110" y="335" font-family="Arial" font-size="16" text-anchor="middle">Z-Library</text>
+  
+  <rect x="50" y="500" width="120" height="60" rx="10" ry="10" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+  <text x="110" y="535" font-family="Arial" font-size="16" text-anchor="middle">Calibre 书库</text>
+  
+  <!-- 核心系统 -->
+  <rect x="250" y="200" width="300" height="200" rx="10" ry="10" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" />
+  <text x="400" y="230" font-family="Arial" font-size="18" text-anchor="middle" font-weight="bold">核心系统</text>
+  
+  <!-- 核心模块 -->
+  <rect x="270" y="250" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="330" y="275" font-family="Arial" font-size="14" text-anchor="middle">数据采集模块</text>
+  
+  <rect x="270" y="300" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="330" y="325" font-family="Arial" font-size="14" text-anchor="middle">数据库模块</text>
+  
+  <rect x="270" y="350" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="330" y="375" font-family="Arial" font-size="14" text-anchor="middle">调度系统</text>
+  
+  <rect x="410" y="250" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="470" y="275" font-family="Arial" font-size="14" text-anchor="middle">Calibre 查询</text>
+  
+  <rect x="410" y="300" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="470" y="325" font-family="Arial" font-size="14" text-anchor="middle">Z-Library 下载</text>
+  
+  <rect x="410" y="350" width="120" height="40" rx="5" ry="5" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="470" y="375" font-family="Arial" font-size="14" text-anchor="middle">Calibre 上传</text>
+  
+  <!-- 通知系统 -->
+  <rect x="630" y="270" width="120" height="60" rx="10" ry="10" fill="#fff3e0" stroke="#f57c00" stroke-width="2" />
+  <text x="690" y="305" font-family="Arial" font-size="16" text-anchor="middle">飞书通知</text>
+  
+  <!-- 数据库 -->
+  <ellipse cx="400" y="450" rx="80" ry="40" fill="#e0f7fa" stroke="#00acc1" stroke-width="2" />
+  <text x="400" y="455" font-family="Arial" font-size="16" text-anchor="middle">数据库</text>
+  
+  <!-- 连接线 -->
+  <!-- 豆瓣到系统 -->
+  <line x1="170" y1="130" x2="250" y2="200" stroke="#757575" stroke-width="2" stroke-dasharray="5,5" />
+  <polygon points="250,200 240,190 235,205" fill="#757575" />
+  
+  <!-- 系统到Z-Library -->
+  <line x1="250" y1="300" x2="170" y2="300" stroke="#757575" stroke-width="2" />
+  <polygon points="170,300 180,295 180,305" fill="#757575" />
+  
+  <!-- Z-Library到系统 -->
+  <line x1="170" y1="330" x2="250" y2="330" stroke="#757575" stroke-width="2" />
+  <polygon points="250,330 240,325 240,335" fill="#757575" />
+  
+  <!-- 系统到Calibre -->
+  <line x1="400" y1="400" x2="110" y2="500" stroke="#757575" stroke-width="2" />
+  <polygon points="110,500 120,490 125,505" fill="#757575" />
+  
+  <!-- 系统到通知 -->
+  <line x1="550" y1="300" x2="630" y2="300" stroke="#757575" stroke-width="2" />
+  <polygon points="630,300 620,295 620,305" fill="#757575" />
+  
+  <!-- 系统到数据库 -->
+  <line x1="400" y1="400" x2="400" y2="410" stroke="#757575" stroke-width="2" />
+  <polygon points="400,410 395,400 405,400" fill="#757575" />
+  
+  <!-- 图例 -->
+  <rect x="50" y="30" width="20" height="20" fill="#e1f5fe" stroke="#0288d1" stroke-width="2" />
+  <text x="80" y="45" font-family="Arial" font-size="14" text-anchor="start">外部系统</text>
+  
+  <rect x="150" y="30" width="20" height="20" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" />
+  <text x="180" y="45" font-family="Arial" font-size="14" text-anchor="start">核心系统</text>
+  
+  <rect x="250" y="30" width="20" height="20" fill="#c8e6c9" stroke="#388e3c" stroke-width="1" />
+  <text x="280" y="45" font-family="Arial" font-size="14" text-anchor="start">功能模块</text>
+  
+  <rect x="350" y="30" width="20" height="20" fill="#fff3e0" stroke="#f57c00" stroke-width="2" />
+  <text x="380" y="45" font-family="Arial" font-size="14" text-anchor="start">通知系统</text>
+  
+  <ellipse cx="450" y="40" rx="10" ry="10" fill="#e0f7fa" stroke="#00acc1" stroke-width="2" />
+  <text x="470" y="45" font-family="Arial" font-size="14" text-anchor="start">数据存储</text>
+</svg>

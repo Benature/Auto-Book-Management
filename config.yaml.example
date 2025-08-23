@@ -1,0 +1,86 @@
+# 豆瓣书单同步与 Calibre 集成自动化配置文件示例
+
+# 豆瓣配置
+douban:
+  # 豆瓣网站 Cookie，用于访问个人书单
+  # 获取方法：登录豆瓣网站后，从浏览器开发者工具中复制 Cookie
+  cookie: "bid=xxxx; dbcl2=xxxx; push_noty_num=0; push_doumail_num=0"
+  # 想读书单 URL，默认为个人的想读书单
+  wishlist_url: "https://book.douban.com/people/me/wish"
+  # 爬取页数限制，设为 0 表示爬取所有页
+  max_pages: 0
+
+# 数据库配置
+database:
+  # 数据库类型：sqlite 或 postgresql
+  type: "sqlite"
+  # SQLite 数据库文件路径（仅 type=sqlite 时使用）
+  path: "data/douban_books.db"
+  # PostgreSQL 配置（仅 type=postgresql 时使用）
+  host: "localhost"
+  port: 5432
+  dbname: "douban_books"
+  username: "postgres"
+  password: "password"
+
+# Calibre 配置
+calibre:
+  # Calibre Content Server URL
+  content_server_url: "http://localhost:8080"
+  # Calibre Content Server 用户名
+  username: "admin"
+  # Calibre Content Server 密码
+  password: "password"
+  # 匹配阈值，0.0-1.0，值越高要求匹配度越精确
+  match_threshold: 0.6
+
+# Z-Library 配置
+zlibrary:
+  # Z-Library 账号
+  username: "your_email@example.com"
+  # Z-Library 密码
+  password: "your_password"
+  # 下载格式优先级，按顺序尝试下载
+  format_priority: ["epub", "mobi", "azw3", "pdf"]
+  # 下载目录，用于临时存储下载的文件
+  download_dir: "data/downloads"
+  # 最大重试次数
+  max_retries: 3
+
+# 调度配置
+schedule:
+  # 每日执行时间，24小时制
+  time: "03:00"
+  # 是否在启动时立即执行一次
+  run_at_startup: false
+  # 失败重试间隔（分钟）
+  retry_interval: 60
+
+# 飞书通知配置
+lark:
+  # 飞书机器人 Webhook URL
+  webhook_url: "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  # 是否启用通知
+  enabled: true
+  # 通知级别：all（所有消息）, success（成功消息）, error（错误消息）
+  level: "all"
+
+# 日志配置
+logging:
+  # 日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  # 日志文件路径
+  file: "logs/app.log"
+  # 是否同时输出到控制台
+  console: true
+  # 日志保留天数
+  retention_days: 30
+
+# 系统配置
+system:
+  # 临时文件目录
+  temp_dir: "data/temp"
+  # 是否启用调试模式
+  debug: false
+  # 用户代理字符串，模拟浏览器访问
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
