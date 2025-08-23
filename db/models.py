@@ -6,7 +6,7 @@
 """
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
