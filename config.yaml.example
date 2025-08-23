@@ -46,6 +46,11 @@ zlibrary:
   download_dir: "data/downloads"
   # 最大重试次数
   max_retries: 3
+  language_priority:
+    - Chinese
+    - English
+  proxy_list:
+    - "socks5://127.0.0.1:9050"
 
 # 调度配置
 schedule:

@@ -1,3 +1,6 @@
-1. 使用pypi包：zlibrary, larkpy
-2. 使用conda环境
+1. 使用pypi包：zlibrary, larkpy, pathlib
+2. 使用uv进行虚拟环境的管理
 3. 使用sqlite3数据库
+4. config.yaml已存在，且基于隐私不允许读，参考config.yaml.example结构即可
+5. 测试使用pytest
+6. 在完成任务或者需要人工介入时运行terminal: `say "<message in English>"`
