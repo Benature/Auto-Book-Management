@@ -124,7 +124,7 @@ class ConfigManager:
             if not db_path.is_absolute():
                 config_dir = self.config_path.resolve().parent
                 db_path = config_dir / db_path
-            return f"sqlite:///{db_path}"
+            return f"sqlite:///{db_path.as_posix()}"
         else:  # postgresql
             return f"postgresql://{db_config['username']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['dbname']}"
 

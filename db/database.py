@@ -14,6 +14,8 @@ import logging
 
 from .models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus
 from utils.logger import get_logger
+import sqlite3
+from pathlib import Path
 
 
 class Database:
@@ -26,9 +28,35 @@ class Database:
         Args:
             db_url: 数据库连接 URL
         """
+        self.db_url = db_url
         self.logger = get_logger("database")
         self.engine = create_engine(db_url)
         self.Session = scoped_session(sessionmaker(bind=self.engine))
+
+    def _initialize_database(self):
+        """
+        初始化数据库，如果数据库文件不存在则创建并初始化表结构。
+        """
+        db_path = Path(self.db_url.replace("sqlite:///", "")).resolve()
+        self.logger.info(f"数据库路径解析为: {db_path.as_posix()}")
+        if not db_path.exists():
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute('''CREATE TABLE IF NOT EXISTS sync_tasks (
+                                id INTEGER PRIMARY KEY,
+                                start_time TEXT NOT NULL,
+                                end_time TEXT,
+                                status TEXT NOT NULL,
+                                books_total INTEGER,
+                                books_new INTEGER,
+                                books_matched INTEGER,
+                                books_downloaded INTEGER,
+                                books_uploaded INTEGER,
+                                books_failed INTEGER,
+                                error_message TEXT
+                            )''')
+            conn.commit()
+            conn.close()
 
     def init_db(self) -> None:
         """
@@ -102,6 +130,37 @@ class Database:
         with self.session_scope() as session:
             return session.query(DoubanBook).filter(
                 DoubanBook.isbn == isbn).first()
+
+    def get_book_by_douban_id(self, douban_id: str) -> Optional[DoubanBook]:
+        """
+        根据豆瓣 ID 获取书籍
+        
+        Args:
+            douban_id: 豆瓣书籍 ID
+            
+        Returns:
+            Optional[DoubanBook]: 书籍对象，如果不存在则返回 None
+        """
+        with self.session_scope() as session:
+            return session.query(DoubanBook).filter(
+                DoubanBook.douban_id == douban_id).first()
+
+    def get_book_by_title_author(self, title: str, author: str) -> Optional[DoubanBook]:
+        """
+        根据标题和作者获取书籍
+        
+        Args:
+            title: 书籍标题
+            author: 作者名称
+            
+        Returns:
+            Optional[DoubanBook]: 书籍对象，如果不存在则返回 None
+        """
+        with self.session_scope() as session:
+            return session.query(DoubanBook).filter(
+                DoubanBook.title == title,
+                DoubanBook.author == author
+            ).first()
 
     def get_books_by_status(self, status: BookStatus) -> List[DoubanBook]:
         """
@@ -214,7 +273,7 @@ class Database:
                 self.logger.warning(f"尝试更新不存在的下载记录: ID {record_id}")
 
     # SyncTask 相关操作
-    def create_sync_task(self) -> SyncTask:
+    def create_sync_task(self) -> int:
         """
         创建同步任务
         
@@ -226,7 +285,7 @@ class Database:
             session.add(task)
             session.flush()
             self.logger.info(f"创建同步任务: ID {task.id}")
-            return task
+            return task.id
 
     def update_sync_task(self, task_id: int, task_data: Dict[str,
                                                              Any]) -> None:

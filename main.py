@@ -58,6 +58,13 @@ class DoubanZLibrary:
         db_url = self.config_manager.get_database_url()
         self.db = Database(db_url)
 
+        # 检查数据库文件是否存在
+        db_path = Path(db_url.replace("sqlite:///", "")).resolve()
+        self.logger.info(f"最终数据库路径为: {db_path}")
+        if not db_path.exists():
+            self.logger.info("数据库文件不存在，正在创建...")
+            self.db.init_db()
+
         # 初始化豆瓣爬虫
         douban_config = self.config_manager.get_douban_config()
         self.douban_scraper = DoubanScraper(
@@ -215,12 +222,10 @@ class DoubanZLibrary:
             # 上传到 Calibre
             book_id = self.calibre_service.upload_book(file_path=file_path,
                                                        metadata={
-                                                           'title':
-                                                           book_title,
+                                                           'title': book_title,
                                                            'author':
                                                            book_author,
-                                                           'isbn':
-                                                           book_isbn
+                                                           'isbn': book_isbn
                                                        })
 
             if book_id:
@@ -250,7 +255,7 @@ class DoubanZLibrary:
         self.logger.info("开始同步豆瓣想读书单")
 
         # 创建同步任务记录
-        sync_task = self.db.create_sync_task()
+        sync_task_id = self.db.create_sync_task()
 
         # 获取豆瓣想读书单
         books = self.fetch_douban_books()
@@ -258,7 +263,7 @@ class DoubanZLibrary:
         if not books:
             self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
             self.db.update_sync_task(
-                sync_task.id, {
+                sync_task_id, {
                     'status': 'failed',
                     'total_books': 0,
                     'success_count': 0,
@@ -274,7 +279,7 @@ class DoubanZLibrary:
             }
 
         # 更新同步任务信息
-        self.db.update_sync_task(sync_task.id, {
+        self.db.update_sync_task(sync_task_id, {
             'status': 'running',
             'total_books': len(books)
         })
@@ -356,7 +361,7 @@ class DoubanZLibrary:
                         'source':
                         'zlibrary',
                         'sync_task_id':
-                        sync_task.id
+                        sync_task_id
                     })
 
                 success_count += 1
