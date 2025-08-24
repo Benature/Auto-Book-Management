@@ -69,6 +69,7 @@ class DoubanScraper:
             if match:
                 user_id = match.group(1).split(':')[0].strip("'\"")
         assert user_id, "cookie 缺少 user_id 信息（dbcl2）"
+        return str(user_id)
 
     def get_wish_list(self) -> List[Dict[str, Any]]:
         """
@@ -85,52 +86,49 @@ class DoubanScraper:
         with Progress() as progress:
             page_task = progress.add_task(
                 "页进度", total=self.max_pages if self.max_pages else None)
+            item_task = progress.add_task(f"第{page}页条目")
             while has_next and (self.max_pages is None or self.max_pages == 0
                                 or page < self.max_pages):
                 page += 1
-                url = f"/people/170683609/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
-                self.conn.request("GET", url, self.payload, self.headers)
-                self.logger.info(f"爬取第 {page} 页: {url}")
-
+                url = f"/people/{self.user_id}/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
                 try:
-                    res = self.conn.getresponse()
-                    text = res.read().decode("utf-8")
-
-                    soup = BeautifulSoup(text, 'lxml')
-                    items = soup.select('.subject-item')
-
-                    if not items:
-                        self.logger.info(f"第 {page} 页没有找到书籍，爬取结束")
-                        has_next = False
-                        break
-
-                    item_task = progress.add_task(f"第{page}页条目",
-                                                  total=len(items))
-                    for item in items:
-                        book_info = self.parse_book_info(item)
-                        if book_info:
-                            books.append(book_info)
-                        progress.update(item_task, advance=1)
-                    progress.remove_task(item_task)
-
-                    next_link = soup.select_one('span.next a')
-                    has_next = next_link is not None
-
-                    progress.update(page_task, advance=1)
-
-                    # 避免请求过于频繁
-                    time.sleep(random.uniform(1.5, 3.5))
-
+                    self.conn.request("GET", url, self.payload, self.headers)
                 except requests.RequestException as e:
                     self.logger.error(f"请求失败: {str(e)}")
                     break
-                except Exception as e:
-                    self.logger.error(f"爬取过程中出错: {str(e)}")
+                self.logger.info(f"爬取第 {page} 页: {url}")
+
+                res = self.conn.getresponse()
+                text = res.read().decode("utf-8")
+
+                soup = BeautifulSoup(text, 'lxml')
+                items = soup.select('.subject-item')
+
+                if not items:
+                    self.logger.info(f"第 {page} 页没有找到书籍，爬取结束")
+                    has_next = False
                     break
+
+                progress.update(item_task, total=len(items), completed=0)
+                for item in items:
+                    book_info = self.parse_book_info(item)
+                    if book_info:
+                        books.append(book_info)
+                    progress.update(item_task, advance=1)
+                # progress.remove_task(item_task)
+
+                next_link = soup.select_one('span.next a')
+                has_next = next_link is not None
+
+                progress.update(page_task, advance=1)
+
+                # 避免请求过于频繁
+                time.sleep(random.uniform(1.5, 3.5))
+
         self.logger.info(f"爬取完成，共获取 {len(books)} 本书")
         return books
 
-    def parse_book_info(self, item) -> Optional[Dict[str, Any]]:
+    def parse_book_info(self, item: BeautifulSoup) -> Optional[Dict[str, Any]]:
         """
         解析书籍信息
         
@@ -258,7 +256,8 @@ class DoubanScraper:
                 'isbn': isbn,
                 'original_title': original_title,
                 'subtitle': subtitle,
-                'description': description
+                'description': description,
+                'status': BookStatus.WITH_DETAIL,
             }
 
         except Exception as e:

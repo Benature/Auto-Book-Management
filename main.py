@@ -23,6 +23,7 @@ from config.config_manager import ConfigManager
 from utils.logger import setup_logger, get_logger
 from db.database import Database
 from db.models import BookStatus, DoubanBook, DownloadRecord, SyncTask
+from datetime import datetime
 from scrapers.douban_scraper import DoubanScraper
 from services.zlibrary_service import ZLibraryService
 from services.calibre_service import CalibreService
@@ -213,8 +214,12 @@ class DoubanZLibrary:
         try:
             # 更新状态为搜索中
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.SEARCHING)
-                
+                with self.db.session_scope() as session:
+                    book_obj = session.query(DoubanBook).filter(
+                        DoubanBook.id == book_id).first()
+                    if book_obj:
+                        book_obj.status = BookStatus.SEARCHING
+
             # 搜索并下载书籍
             download_result = self.zlibrary_service.search_and_download(
                 title=book_title, author=book_author, isbn=book_isbn)
@@ -223,38 +228,58 @@ class DoubanZLibrary:
                 error_msg = f"从 Z-Library 下载失败: {download_result.get('error') if download_result else '未找到资源'}"
                 self.logger.error(error_msg)
                 if book_id:
-                    self.db.update_book_status(book_id, BookStatus.SEARCH_NOT_FOUND)
+                    with self.db.session_scope() as session:
+                        book_obj = session.query(DoubanBook).filter(
+                            DoubanBook.id == book_id).first()
+                        if book_obj:
+                            book_obj.status = BookStatus.SEARCH_NOT_FOUND
                 return False, None, error_msg
 
             # 更新状态为下载中
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.DOWNLOADING)
-                
+                with self.db.session_scope() as session:
+                    book_obj = session.query(DoubanBook).filter(
+                        DoubanBook.id == book_id).first()
+                    if book_obj:
+                        book_obj.status = BookStatus.DOWNLOADING
+
             file_path = download_result['file_path']
             self.logger.info(f"从 Z-Library 下载成功: {file_path}")
-            
+
             # 更新状态为已下载
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.DOWNLOADED)
+                with self.db.session_scope() as session:
+                    book_obj = session.query(DoubanBook).filter(
+                        DoubanBook.id == book_id).first()
+                    if book_obj:
+                        book_obj.status = BookStatus.DOWNLOADED
 
             # 更新状态为上传中
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.UPLOADING)
-                
+                with self.db.session_scope() as session:
+                    book_obj = session.query(DoubanBook).filter(
+                        DoubanBook.id == book_id).first()
+                    if book_obj:
+                        book_obj.status = BookStatus.UPLOADING
+
             # 上传到 Calibre
-            book_id_calibre = self.calibre_service.upload_book(file_path=file_path,
-                                                       metadata={
-                                                           'title': book_title,
-                                                           'author':
-                                                           book_author,
-                                                           'isbn': book_isbn
-                                                       })
+            book_id_calibre = self.calibre_service.upload_book(
+                file_path=file_path,
+                metadata={
+                    'title': book_title,
+                    'author': book_author,
+                    'isbn': book_isbn
+                })
 
             if book_id_calibre:
                 self.logger.info(
                     f"上传到 Calibre 成功: {book_title}, ID: {book_id_calibre}")
                 if book_id:
-                    self.db.update_book_status(book_id, BookStatus.UPLOADED)
+                    with self.db.session_scope() as session:
+                        book_obj = session.query(DoubanBook).filter(
+                            DoubanBook.id == book_id).first()
+                        if book_obj:
+                            book_obj.status = BookStatus.UPLOADED
             else:
                 self.logger.warning(f"上传到 Calibre 失败: {book_title}")
 
@@ -265,7 +290,11 @@ class DoubanZLibrary:
             self.logger.error(error_msg)
             traceback.print_exc()
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.SEARCH_NOT_FOUND)
+                with self.db.session_scope() as session:
+                    book_obj = session.query(DoubanBook).filter(
+                        DoubanBook.id == book_id).first()
+                    if book_obj:
+                        book_obj.status = BookStatus.SEARCH_NOT_FOUND
             return False, None, error_msg
 
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
@@ -321,124 +350,112 @@ class DoubanZLibrary:
             book_title = book.get('title', '未知')
             book_author = book.get('author', '未知')
 
-            existing_book = None
-            if book_isbn:
-                existing_book = self.db.get_book_by_isbn(book_isbn)
+            with self.db.session_scope() as session:
+                existing_book = None
+                if book_isbn:
+                    existing_book = session.query(DoubanBook).filter(
+                        DoubanBook.isbn == book_isbn).first()
 
-            if not existing_book:
-                existing_book = self.db.get_book_by_title_author(
-                    book_title, book_author)
+                if not existing_book:
+                    existing_book = session.query(DoubanBook).filter(
+                        DoubanBook.title == book_title,
+                        DoubanBook.author == book_author).first()
 
-            # 如果书籍已存在且已下载成功，跳过
-            if existing_book and existing_book.status == BookStatus.DOWNLOADED:
-                self.logger.info(f"书籍已存在且已下载: {book_title}")
-                success_count += 1
-                details.append({
-                    'title': book_title,
-                    'author': book_author,
-                    'isbn': book_isbn,
-                    'status': 'skipped',
-                    'message': '书籍已存在且已下载'
-                })
-                continue
+                # 如果书籍已存在且已下载成功，跳过
+                if existing_book and existing_book.status == BookStatus.DOWNLOADED:
+                    self.logger.info(f"书籍已存在且已下载: {book_title}")
+                    success_count += 1
+                    details.append({
+                        'title': book_title,
+                        'author': book_author,
+                        'isbn': book_isbn,
+                        'status': 'skipped',
+                        'message': '书籍已存在且已下载'
+                    })
+                    continue
 
-            # 如果书籍不存在，创建记录
-            if not existing_book:
-                existing_book = self.db.create_book({
-                    'title':
-                    book_title,
-                    'author':
-                    book_author,
-                    'isbn':
-                    book_isbn,
-                    'douban_id':
-                    book.get('douban_id', ''),
-                    'douban_url':
-                    book.get('url', ''),
-                    'cover_url':
-                    book.get('cover_url', ''),
-                    'publisher':
-                    book.get('publisher', ''),
-                    'publish_date':
-                    book.get('publish_date', ''),
-                    'status':
-                    BookStatus.NEW
-                })
+                # 如果书籍不存在，创建记录
+                if not existing_book:
+                    existing_book = DoubanBook(
+                        title=book_title,
+                        author=book_author,
+                        isbn=book_isbn,
+                        douban_id=book.get('douban_id') or None,
+                        douban_url=book.get('url') or None,
+                        cover_url=book.get('cover_url') or None,
+                        publisher=book.get('publisher') or None,
+                        publish_date=book.get('publish_date') or None,
+                        status=BookStatus.NEW
+                    )
+                    session.add(existing_book)
+                    session.flush()
 
-            # 处理书籍
-            success, file_path, error_msg = self.process_book(book, existing_book.id)
+                # 处理书籍
+                success, file_path, error_msg = self.process_book(
+                    book, existing_book.id)
 
-            # 更新书籍状态
-            if success:
-                # 状态已在 process_book 中更新为 DOWNLOADED 或 UPLOADED
-                self.db.update_book(existing_book.id, {
-                    'last_check': datetime.now()
-                })
+                # 更新书籍状态
+                if success:
+                    # 状态已在 process_book 中更新为 DOWNLOADED 或 UPLOADED
+                    existing_book.last_check = datetime.now()
 
-                if file_path:
-                    # 创建下载记录
-                    self.db.create_download_record({
-                        'book_id':
-                        existing_book.id,
-                        'file_path':
-                        file_path,
-                        'file_format':
-                        Path(file_path).suffix[1:] if file_path else '',
-                        'source':
-                        'zlibrary',
-                        'sync_task_id':
-                        sync_task_id
+                    if file_path:
+                        # 创建下载记录
+                        download_record = DownloadRecord(
+                            book_id=existing_book.id,
+                            file_path=file_path,
+                            file_format=Path(file_path).suffix[1:] if file_path else '',
+                            source='zlibrary',
+                            sync_task_id=sync_task_id
+                        )
+                        session.add(download_record)
+
+                    success_count += 1
+                    details.append({
+                        'title': book_title,
+                        'author': book_author,
+                        'isbn': book_isbn,
+                        'status': 'success',
+                        'file_path': file_path
                     })
 
-                success_count += 1
-                details.append({
-                    'title': book_title,
-                    'author': book_author,
-                    'isbn': book_isbn,
-                    'status': 'success',
-                    'file_path': file_path
-                })
+                    # 发送通知
+                    if notify and self.lark_service:
+                        self.lark_service.send_book_notification(
+                            book_info={
+                                'title': book_title,
+                                'author': book_author,
+                                'isbn': book_isbn
+                            },
+                            download_status=True)
+                else:
+                    existing_book.status = BookStatus.SEARCH_NOT_FOUND
+                    existing_book.last_check = datetime.now()
+                    existing_book.error_message = error_msg
 
-                # 发送通知
-                if notify and self.lark_service:
-                    self.lark_service.send_book_notification(
-                        book_info={
-                            'title': book_title,
-                            'author': book_author,
-                            'isbn': book_isbn
-                        },
-                        download_status=True)
-            else:
-                self.db.update_book(
-                    existing_book.id, {
-                        'status': BookStatus.SEARCH_NOT_FOUND,
-                        'last_check': datetime.now(),
-                        'error_message': error_msg
+                    failed_count += 1
+                    details.append({
+                        'title': book_title,
+                        'author': book_author,
+                        'isbn': book_isbn,
+                        'status': 'failed',
+                        'message': error_msg
                     })
 
-                failed_count += 1
-                details.append({
-                    'title': book_title,
-                    'author': book_author,
-                    'isbn': book_isbn,
-                    'status': 'failed',
-                    'message': error_msg
-                })
-
-                # 发送通知
-                if notify and self.lark_service:
-                    self.lark_service.send_book_notification(
-                        book_info={
-                            'title': book_title,
-                            'author': book_author,
-                            'isbn': book_isbn
-                        },
-                        download_status=False,
-                        error_message=error_msg)
+                    # 发送通知
+                    if notify and self.lark_service:
+                        self.lark_service.send_book_notification(
+                            book_info={
+                                'title': book_title,
+                                'author': book_author,
+                                'isbn': book_isbn
+                            },
+                            download_status=False,
+                            error_message=error_msg)
 
         # 更新同步任务信息
         self.db.update_sync_task(
-            sync_task.id, {
+            sync_task_id, {
                 'status': 'completed',
                 'success_count': success_count,
                 'failed_count': failed_count,
