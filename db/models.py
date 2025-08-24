@@ -5,7 +5,7 @@
 定义 SQLAlchemy ORM 模型。
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float, Boolean
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -16,13 +16,15 @@ Base = declarative_base()
 
 class BookStatus(enum.Enum):
     """书籍状态枚举"""
-    NEW = "new"  # 新发现的书籍
-    MATCHED = "matched"  # 已在 Calibre 中匹配到
+    NEW = "new"  # 豆瓣中新发现的书籍
+    WITH_DETAIL = "with_detail"  # 已获取详细信息
+    MATCHED = "matched"  # 已在 Calibre 中匹配到，结束节点
+    SEARCHING = "searching"  # 正在从 Z-Library 搜索
+    SEARCH_NOT_FOUND = "search_not_found"  # 未在 Z-Library 找到
     DOWNLOADING = "downloading"  # 正在从 Z-Library 下载
     DOWNLOADED = "downloaded"  # 已从 Z-Library 下载
     UPLOADING = "uploading"  # 正在上传到 Calibre
-    UPLOADED = "uploaded"  # 已上传到 Calibre
-    FAILED = "failed"  # 处理失败
+    UPLOADED = "uploaded"  # 已上传到 Calibre，结束节点
 
 
 class DoubanBook(Base):

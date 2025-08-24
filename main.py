@@ -181,12 +181,14 @@ class DoubanZLibrary:
 
     def process_book(
             self,
-            book: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
+            book: Dict[str, Any],
+            book_id: int = None) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         处理单本书籍：下载并上传到 Calibre
         
         Args:
             book: 书籍信息
+            book_id: 书籍在数据库中的ID（可选）
             
         Returns:
             Tuple[bool, Optional[str], Optional[str]]: (是否成功, 文件路径, 错误信息)
@@ -203,24 +205,44 @@ class DoubanZLibrary:
 
         if existing_book:
             self.logger.info(f"书籍已存在于 Calibre: {book_title}")
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.MATCHED)
             return True, None, None
 
         # 从 Z-Library 下载
         try:
+            # 更新状态为搜索中
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.SEARCHING)
+                
             # 搜索并下载书籍
             download_result = self.zlibrary_service.search_and_download(
                 title=book_title, author=book_author, isbn=book_isbn)
 
-            if not download_result['success']:
-                error_msg = f"从 Z-Library 下载失败: {download_result['error']}"
+            if not download_result or not download_result.get('success'):
+                error_msg = f"从 Z-Library 下载失败: {download_result.get('error') if download_result else '未找到资源'}"
                 self.logger.error(error_msg)
+                if book_id:
+                    self.db.update_book_status(book_id, BookStatus.SEARCH_NOT_FOUND)
                 return False, None, error_msg
 
+            # 更新状态为下载中
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.DOWNLOADING)
+                
             file_path = download_result['file_path']
             self.logger.info(f"从 Z-Library 下载成功: {file_path}")
+            
+            # 更新状态为已下载
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.DOWNLOADED)
 
+            # 更新状态为上传中
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.UPLOADING)
+                
             # 上传到 Calibre
-            book_id = self.calibre_service.upload_book(file_path=file_path,
+            book_id_calibre = self.calibre_service.upload_book(file_path=file_path,
                                                        metadata={
                                                            'title': book_title,
                                                            'author':
@@ -228,9 +250,11 @@ class DoubanZLibrary:
                                                            'isbn': book_isbn
                                                        })
 
-            if book_id:
+            if book_id_calibre:
                 self.logger.info(
-                    f"上传到 Calibre 成功: {book_title}, ID: {book_id}")
+                    f"上传到 Calibre 成功: {book_title}, ID: {book_id_calibre}")
+                if book_id:
+                    self.db.update_book_status(book_id, BookStatus.UPLOADED)
             else:
                 self.logger.warning(f"上传到 Calibre 失败: {book_title}")
 
@@ -240,6 +264,8 @@ class DoubanZLibrary:
             error_msg = f"处理书籍失败: {str(e)}"
             self.logger.error(error_msg)
             traceback.print_exc()
+            if book_id:
+                self.db.update_book_status(book_id, BookStatus.SEARCH_NOT_FOUND)
             return False, None, error_msg
 
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
@@ -336,16 +362,16 @@ class DoubanZLibrary:
                     'publish_date':
                     book.get('publish_date', ''),
                     'status':
-                    BookStatus.PENDING
+                    BookStatus.NEW
                 })
 
             # 处理书籍
-            success, file_path, error_msg = self.process_book(book)
+            success, file_path, error_msg = self.process_book(book, existing_book.id)
 
             # 更新书籍状态
             if success:
+                # 状态已在 process_book 中更新为 DOWNLOADED 或 UPLOADED
                 self.db.update_book(existing_book.id, {
-                    'status': BookStatus.DOWNLOADED,
                     'last_check': datetime.now()
                 })
 
@@ -385,7 +411,7 @@ class DoubanZLibrary:
             else:
                 self.db.update_book(
                     existing_book.id, {
-                        'status': BookStatus.FAILED,
+                        'status': BookStatus.SEARCH_NOT_FOUND,
                         'last_check': datetime.now(),
                         'error_message': error_msg
                     })

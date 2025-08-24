@@ -145,7 +145,8 @@ class Database:
             return session.query(DoubanBook).filter(
                 DoubanBook.douban_id == douban_id).first()
 
-    def get_book_by_title_author(self, title: str, author: str) -> Optional[DoubanBook]:
+    def get_book_by_title_author(self, title: str,
+                                 author: str) -> Optional[DoubanBook]:
         """
         根据标题和作者获取书籍
         
@@ -159,8 +160,7 @@ class Database:
         with self.session_scope() as session:
             return session.query(DoubanBook).filter(
                 DoubanBook.title == title,
-                DoubanBook.author == author
-            ).first()
+                DoubanBook.author == author).first()
 
     def get_books_by_status(self, status: BookStatus) -> List[DoubanBook]:
         """
