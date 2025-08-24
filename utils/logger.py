@@ -14,7 +14,7 @@ from logging.handlers import TimedRotatingFileHandler
 from typing import Optional
 
 
-def setup_logger(log_level: int = logging.INFO,
+def setup_logger(log_level: int = logging.DEBUG,
                  log_file: Optional[str] = None,
                  console: bool = True,
                  retention_days: int = 30) -> logging.Logger:

@@ -93,6 +93,8 @@ class ZLibraryService:
 
         # 调用客户端的search方法
         paginator = asyncio.run(self.lib.search(q=query))
+        # TODO: 在 search books 中完成书籍匹配程度的排序
+        # first_set = await paginator.next()
 
         return paginator
 

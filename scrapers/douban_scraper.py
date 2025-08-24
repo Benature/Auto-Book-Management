@@ -9,12 +9,14 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import re
+import random
 from typing import List, Dict, Any, Optional, Tuple
-import logging
-from datetime import datetime
 
 from utils.logger import get_logger
 from db.models import BookStatus
+import http.client
+
+DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
 
 
 class DoubanScraper:
@@ -23,7 +25,8 @@ class DoubanScraper:
     def __init__(self,
                  cookie: str,
                  user_agent: str = None,
-                 max_pages: int = 0):
+                 max_pages: int = None,
+                 user_id: int | str = None):
         """
         初始化爬虫
         
@@ -36,14 +39,35 @@ class DoubanScraper:
         self.cookie = cookie
         self.max_pages = max_pages
 
+        assert cookie is not None, "cookie 不可为空"
+        self.user_id = self.get_user_id(user_id, cookie)
+        self.base_url = f"https://book.douban.com/people/{user_id}/"
+
+        self.conn = http.client.HTTPSConnection("book.douban.com")
+        self.payload = ''
         self.headers = {
-            'User-Agent': user_agent or
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Cookie': cookie
+            'Cookie': cookie,
+            'User-Agent': user_agent or DEFAULT_USER_AGENT,
         }
-        self.base_url = "https://book.douban.com/people/me/wish"
+
+        # self.headers = {
+        #     'Cookie': cookie,
+        #     'Accept':
+        #     'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        #     'Referer': self.base_url
+        # }
         self.session = requests.Session()
-        self.session.headers.update(self.headers)
+        # self.session.headers.update(self.headers)
+
+    def get_user_id(self, user_id: str, cookie: str) -> str:
+        if user_id is not None:
+            return str(user_id)
+        user_id = None
+        if 'dbcl2=' in cookie:
+            match = re.search(r'dbcl2=([^;]+)', cookie)
+            if match:
+                user_id = match.group(1).split(':')[0].strip("'\"")
+        assert user_id, "cookie 缺少 user_id 信息（dbcl2）"
 
     def get_wish_list(self) -> List[Dict[str, Any]]:
         """
@@ -57,21 +81,20 @@ class DoubanScraper:
         page = 0
         has_next = True
 
-        while has_next and (self.max_pages == 0 or page < self.max_pages):
+        while has_next and (self.max_pages is None or self.max_pages == 0
+                            or page < self.max_pages):
             page += 1
-            url = f"{self.base_url}?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
+            url = f"/people/170683609/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
+            self.conn.request("GET", url, self.payload, self.headers)
             self.logger.info(f"爬取第 {page} 页: {url}")
 
             try:
-                response = self.session.get(url, timeout=10)
-                response.raise_for_status()
+                # response = self.session.get(url, timeout=10)
+                # response.raise_for_status()
+                res = self.conn.getresponse()
+                text = res.read().decode("utf-8")
 
-                # 检查是否需要登录
-                if "你需要登录才能使用此功能" in response.text:
-                    self.logger.error("豆瓣 Cookie 无效或已过期，需要重新登录")
-                    break
-
-                soup = BeautifulSoup(response.text, 'lxml')
+                soup = BeautifulSoup(text, 'lxml')
                 items = soup.select('.subject-item')
 
                 if not items:
@@ -87,6 +110,8 @@ class DoubanScraper:
                 # 检查是否有下一页
                 next_link = soup.select_one('span.next a')
                 has_next = next_link is not None
+
+                break
 
                 # 避免请求过于频繁
                 time.sleep(2)
