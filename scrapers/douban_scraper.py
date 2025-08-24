@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from utils.logger import get_logger
 from db.models import BookStatus
 import http.client
+from rich.progress import Progress
 
 DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
 
@@ -81,48 +82,48 @@ class DoubanScraper:
         page = 0
         has_next = True
 
-        while has_next and (self.max_pages is None or self.max_pages == 0
-                            or page < self.max_pages):
-            page += 1
-            url = f"/people/170683609/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
-            self.conn.request("GET", url, self.payload, self.headers)
-            self.logger.info(f"爬取第 {page} 页: {url}")
+        with Progress() as progress:
+            page_task = progress.add_task("页进度", total=self.max_pages if self.max_pages else None)
+            while has_next and (self.max_pages is None or self.max_pages == 0 or page < self.max_pages):
+                page += 1
+                url = f"/people/170683609/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
+                self.conn.request("GET", url, self.payload, self.headers)
+                self.logger.info(f"爬取第 {page} 页: {url}")
 
-            try:
-                # response = self.session.get(url, timeout=10)
-                # response.raise_for_status()
-                res = self.conn.getresponse()
-                text = res.read().decode("utf-8")
+                try:
+                    res = self.conn.getresponse()
+                    text = res.read().decode("utf-8")
 
-                soup = BeautifulSoup(text, 'lxml')
-                items = soup.select('.subject-item')
+                    soup = BeautifulSoup(text, 'lxml')
+                    items = soup.select('.subject-item')
 
-                if not items:
-                    self.logger.info(f"第 {page} 页没有找到书籍，爬取结束")
-                    has_next = False
+                    if not items:
+                        self.logger.info(f"第 {page} 页没有找到书籍，爬取结束")
+                        has_next = False
+                        break
+
+                    item_task = progress.add_task(f"第{page}页条目", total=len(items))
+                    for item in items:
+                        book_info = self.parse_book_info(item)
+                        if book_info:
+                            books.append(book_info)
+                        progress.update(item_task, advance=1)
+                    progress.remove_task(item_task)
+
+                    next_link = soup.select_one('span.next a')
+                    has_next = next_link is not None
+
+                    progress.update(page_task, advance=1)
+
+                    # 避免请求过于频繁
+                    time.sleep(random.uniform(1.5, 3.5))
+
+                except requests.RequestException as e:
+                    self.logger.error(f"请求失败: {str(e)}")
                     break
-
-                for item in items:
-                    book_info = self.parse_book_info(item)
-                    if book_info:
-                        books.append(book_info)
-
-                # 检查是否有下一页
-                next_link = soup.select_one('span.next a')
-                has_next = next_link is not None
-
-                break
-
-                # 避免请求过于频繁
-                time.sleep(2)
-
-            except requests.RequestException as e:
-                self.logger.error(f"请求失败: {str(e)}")
-                break
-            except Exception as e:
-                self.logger.error(f"爬取过程中出错: {str(e)}")
-                break
-
+                except Exception as e:
+                    self.logger.error(f"爬取过程中出错: {str(e)}")
+                    break
         self.logger.info(f"爬取完成，共获取 {len(books)} 本书")
         return books
 
@@ -248,7 +249,7 @@ class DoubanScraper:
                 description = intro_element.get_text(strip=True)
 
             # 避免请求过于频繁
-            time.sleep(1)
+            time.sleep(random.uniform(0.8, 2.0))
 
             return {
                 'isbn': isbn,
