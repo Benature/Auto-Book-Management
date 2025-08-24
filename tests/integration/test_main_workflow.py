@@ -166,7 +166,6 @@ class TestMainWorkflow(unittest.TestCase):
         self.douban_scraper.get_wishlist.return_value = mock_douban_books
 
         # 2. Z-Library Service
-        self.zlibrary_service.test_connection.return_value = True
         self.zlibrary_service.search_books.return_value = mock_zlib_results
         self.zlibrary_service.download_book.return_value = {
             'success': True,
@@ -176,7 +175,6 @@ class TestMainWorkflow(unittest.TestCase):
         }
 
         # 3. Calibre Service
-        self.calibre_service.test_connection.return_value = True
         self.calibre_service.search_books.return_value = mock_calibre_results  # Empty, book not in Calibre yet
         self.calibre_service.upload_book.return_value = 1  # Calibre book ID
 

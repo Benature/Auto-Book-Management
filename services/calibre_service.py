@@ -45,23 +45,7 @@ class CalibreService:
         self.session = requests.Session()
         self.session.auth = self.auth
 
-    def test_connection(self) -> bool:
-        """
-        测试与 Calibre Content Server 的连接
-        
-        Returns:
-            bool: 连接是否成功
-        """
-        try:
-            self.logger.info(f"测试连接 Calibre Content Server: {self.server_url}")
-            response = self.session.get(f"{self.server_url}/ajax/library-info",
-                                        timeout=10)
-            response.raise_for_status()
-            self.logger.info("Calibre Content Server 连接成功")
-            return True
-        except Exception as e:
-            self.logger.error(f"Calibre Content Server 连接失败: {str(e)}")
-            return False
+
 
     def search_book(self,
                     title: str,

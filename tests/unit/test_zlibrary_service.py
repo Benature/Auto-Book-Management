@@ -66,24 +66,7 @@ def zlibrary_service(config_manager):
 #     mock_zlib_client.assert_called_once_with()
 
 
-@patch('services.zlibrary_service.AsyncZlib')
-def test_test_connection(mock_zlib_client, zlibrary_service):
-    """测试连接测试功能"""
-    service, _, _, _, _ = zlibrary_service
 
-    # 模拟连接成功
-    mock_client_instance = mock_zlib_client.return_value
-    # 添加test_connection属性
-    mock_client_instance.test_connection = MagicMock(return_value=True)
-
-    result = service.test_connection()
-    assert result is True
-    mock_client_instance.test_connection.assert_called_once()
-
-    # 模拟连接失败
-    mock_client_instance.test_connection.return_value = False
-    result = service.test_connection()
-    assert result is False
 
 
 @patch('services.zlibrary_service.AsyncZlib')

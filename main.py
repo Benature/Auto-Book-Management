@@ -44,41 +44,42 @@ class DoubanZLibrary:
         self.config_manager = ConfigManager(config_path)
 
         # 设置日志
-        log_config = self.config_manager.get_log_config()
-        log_dir = log_config.get('log_dir', 'logs')
-        log_level = log_config.get('log_level', 'INFO')
-        setup_logger(log_dir, log_level)
+        import logging
+        log_config = self.config_manager.get_logging_config()
+        log_file = log_config.get('file', 'logs/app.log')
+        log_level = log_config.get('level', 'INFO')
+        log_level_value = getattr(logging, log_level.upper(), logging.INFO)
+        setup_logger(log_level_value, log_file)
         self.logger = get_logger("main")
 
         self.logger.info("初始化豆瓣 Z-Library 同步工具")
 
         # 初始化数据库
-        db_config = self.config_manager.get_db_config()
-        self.db = Database(db_config)
+        db_url = self.config_manager.get_database_url()
+        self.db = Database(db_url)
 
         # 初始化豆瓣爬虫
         douban_config = self.config_manager.get_douban_config()
         self.douban_scraper = DoubanScraper(
-            cookies=douban_config.get('cookies', {}),
-            user_id=douban_config.get('user_id', ''),
-            max_books=douban_config.get('max_books', 100),
-            request_delay=douban_config.get('request_delay', 2.0))
+            cookie=douban_config.get('cookie'),
+            user_id=douban_config.get('user_id'),
+            max_pages=douban_config.get('max_pages'))
 
         # 初始化 Z-Library 服务
         zlib_config = self.config_manager.get_zlibrary_config()
         self.zlibrary_service = ZLibraryService(
-            email=zlib_config.get('email', ''),
-            password=zlib_config.get('password', ''),
-            download_dir=zlib_config.get('download_dir', 'data/downloads'),
-            preferred_formats=zlib_config.get('preferred_formats',
-                                              ['epub', 'mobi', 'pdf']))
+            email=zlib_config.get('username'),
+            password=zlib_config.get('password'),
+            format_priority=zlib_config.get('format_priority'),
+            proxy_list=zlib_config.get('proxy_list'),
+            download_dir=zlib_config.get('download_dir', 'data/downloads'))
 
         # 初始化 Calibre 服务
         calibre_config = self.config_manager.get_calibre_config()
         self.calibre_service = CalibreService(
-            server_url=calibre_config.get('server_url', ''),
-            username=calibre_config.get('username', ''),
-            password=calibre_config.get('password', ''),
+            server_url=calibre_config.get('content_server_url'),
+            username=calibre_config.get('username'),
+            password=calibre_config.get('password'),
             match_threshold=calibre_config.get('match_threshold', 0.6))
 
         # 初始化飞书通知服务
@@ -161,11 +162,6 @@ class DoubanZLibrary:
         self.logger.info("开始获取豆瓣想读书单")
 
         try:
-            # 测试豆瓣连接
-            if not self.douban_scraper.test_connection():
-                self.logger.error("豆瓣连接测试失败，请检查网络和 Cookie 设置")
-                return []
-
             # 获取想读书单
             books = self.douban_scraper.get_wish_list()
             self.logger.info(f"成功获取豆瓣想读书单，共 {len(books)} 本书")
@@ -195,22 +191,15 @@ class DoubanZLibrary:
         self.logger.info(f"处理书籍: {book_title} - {book_author}")
 
         # 检查 Calibre 中是否已存在
-        if self.calibre_service.test_connection():
-            existing_book = self.calibre_service.find_best_match(
-                title=book_title, author=book_author, isbn=book_isbn)
+        existing_book = self.calibre_service.find_best_match(
+            title=book_title, author=book_author, isbn=book_isbn)
 
-            if existing_book:
-                self.logger.info(f"书籍已存在于 Calibre: {book_title}")
-                return True, None, None
+        if existing_book:
+            self.logger.info(f"书籍已存在于 Calibre: {book_title}")
+            return True, None, None
 
         # 从 Z-Library 下载
         try:
-            # 测试 Z-Library 连接
-            if not self.zlibrary_service.test_connection():
-                error_msg = "Z-Library 连接测试失败，请检查网络和账号设置"
-                self.logger.error(error_msg)
-                return False, None, error_msg
-
             # 搜索并下载书籍
             download_result = self.zlibrary_service.search_and_download(
                 title=book_title, author=book_author, isbn=book_isbn)
@@ -224,22 +213,21 @@ class DoubanZLibrary:
             self.logger.info(f"从 Z-Library 下载成功: {file_path}")
 
             # 上传到 Calibre
-            if self.calibre_service.test_connection():
-                book_id = self.calibre_service.upload_book(file_path=file_path,
-                                                           metadata={
-                                                               'title':
-                                                               book_title,
-                                                               'author':
-                                                               book_author,
-                                                               'isbn':
-                                                               book_isbn
-                                                           })
+            book_id = self.calibre_service.upload_book(file_path=file_path,
+                                                       metadata={
+                                                           'title':
+                                                           book_title,
+                                                           'author':
+                                                           book_author,
+                                                           'isbn':
+                                                           book_isbn
+                                                       })
 
-                if book_id:
-                    self.logger.info(
-                        f"上传到 Calibre 成功: {book_title}, ID: {book_id}")
-                else:
-                    self.logger.warning(f"上传到 Calibre 失败: {book_title}")
+            if book_id:
+                self.logger.info(
+                    f"上传到 Calibre 成功: {book_title}, ID: {book_id}")
+            else:
+                self.logger.warning(f"上传到 Calibre 失败: {book_title}")
 
             return True, file_path, None
 
@@ -510,7 +498,11 @@ def main():
                         "--daemon",
                         action="store_true",
                         help="以守护进程模式运行")
-    parser.add_argument("-o", "--once", action="store_true", help="执行一次同步后退出")
+    parser.add_argument("-o",
+                        "--once",
+                        action="store_true",
+                        default=True,
+                        help="执行一次同步后退出")
     parser.add_argument("--cleanup", action="store_true", help="清理临时文件")
 
     args = parser.parse_args()

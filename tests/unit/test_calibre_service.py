@@ -31,29 +31,7 @@ class TestCalibreService(unittest.TestCase):
         self.assertEqual(self.calibre_service.password, 'test_pass')
         self.assertEqual(self.calibre_service.library, 'test_library')
 
-    @patch('services.calibre_service.requests.get')
-    def test_test_connection_success(self, mock_get):
-        """Test successful connection to Calibre server."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
 
-        result = self.calibre_service.test_connection()
-        self.assertTrue(result)
-        mock_get.assert_called_once_with(
-            f'{self.calibre_service.base_url}/ajax/library-info',
-            auth=(self.calibre_service.username,
-                  self.calibre_service.password),
-            timeout=10)
-
-    @patch('services.calibre_service.requests.get')
-    def test_test_connection_failure(self, mock_get):
-        """Test failed connection to Calibre server."""
-        mock_get.side_effect = requests.exceptions.RequestException(
-            "Connection error")
-
-        result = self.calibre_service.test_connection()
-        self.assertFalse(result)
 
     @patch('services.calibre_service.requests.get')
     def test_search_books_by_title(self, mock_get):

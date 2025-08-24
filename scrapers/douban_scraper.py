@@ -83,8 +83,10 @@ class DoubanScraper:
         has_next = True
 
         with Progress() as progress:
-            page_task = progress.add_task("页进度", total=self.max_pages if self.max_pages else None)
-            while has_next and (self.max_pages is None or self.max_pages == 0 or page < self.max_pages):
+            page_task = progress.add_task(
+                "页进度", total=self.max_pages if self.max_pages else None)
+            while has_next and (self.max_pages is None or self.max_pages == 0
+                                or page < self.max_pages):
                 page += 1
                 url = f"/people/170683609/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
                 self.conn.request("GET", url, self.payload, self.headers)
@@ -102,7 +104,8 @@ class DoubanScraper:
                         has_next = False
                         break
 
-                    item_task = progress.add_task(f"第{page}页条目", total=len(items))
+                    item_task = progress.add_task(f"第{page}页条目",
+                                                  total=len(items))
                     for item in items:
                         book_info = self.parse_book_info(item)
                         if book_info:
