@@ -17,7 +17,13 @@ from db.models import BookStatus
 import http.client
 from rich.progress import Progress
 
-DEFAULT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36'
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59'
+]
 
 
 class DoubanScraper:
@@ -27,7 +33,8 @@ class DoubanScraper:
                  cookie: str,
                  user_agent: str = None,
                  max_pages: int = None,
-                 user_id: int | str = None):
+                 user_id: int | str = None,
+                 proxy: str = None):
         """
         初始化爬虫
         
@@ -35,21 +42,41 @@ class DoubanScraper:
             cookie: 豆瓣网站 Cookie
             user_agent: 用户代理字符串
             max_pages: 最大爬取页数，0 表示不限制
+            proxy: 代理服务器地址，格式为 http://host:port 或 socks5://host:port
         """
         self.logger = get_logger("douban_scraper")
         self.cookie = cookie
         self.max_pages = max_pages
+        self.proxy = proxy
 
         assert cookie is not None, "cookie 不可为空"
         self.user_id = self.get_user_id(user_id, cookie)
         self.base_url = f"https://book.douban.com/people/{user_id}/"
 
-        self.conn = http.client.HTTPSConnection("book.douban.com")
-        self.payload = ''
-        self.headers = {
+        self.session = requests.Session()
+        if self.proxy:
+            self.session.proxies = {
+                'http': self.proxy,
+                'https': self.proxy
+            }
+        self.session.headers.update({
             'Cookie': cookie,
-            'User-Agent': user_agent or DEFAULT_USER_AGENT,
-        }
+            'User-Agent': user_agent or random.choice(USER_AGENTS),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'max-age=0',
+            'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"macOS"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'Referer': self.base_url
+        })
 
         # self.headers = {
         #     'Cookie': cookie,
@@ -90,16 +117,21 @@ class DoubanScraper:
             while has_next and (self.max_pages is None or self.max_pages == 0
                                 or page < self.max_pages):
                 page += 1
-                url = f"/people/{self.user_id}/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
+                url = f"https://book.douban.com/people/{self.user_id}/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
                 try:
-                    self.conn.request("GET", url, self.payload, self.headers)
+                    self.logger.info(f"爬取第 {page} 页: {url}")
+                    # 随机延迟 3-7 秒
+                    time.sleep(random.uniform(3, 7))
+                    # 更新 User-Agent
+                    self.session.headers.update({
+                        'User-Agent': random.choice(USER_AGENTS)
+                    })
+                    response = self.session.get(url, timeout=15)
+                    response.raise_for_status()
+                    text = response.text
                 except requests.RequestException as e:
                     self.logger.error(f"请求失败: {str(e)}")
                     break
-                self.logger.info(f"爬取第 {page} 页: {url}")
-
-                res = self.conn.getresponse()
-                text = res.read().decode("utf-8")
 
                 soup = BeautifulSoup(text, 'lxml')
                 items = soup.select('.subject-item')
@@ -195,7 +227,7 @@ class DoubanScraper:
             }
 
             # 获取详细信息（ISBN 等）
-            detailed_info = self.get_book_detail(douban_id)
+            detailed_info = self.get_book_detail(douban_url)
             if detailed_info:
                 book_info.update(detailed_info)
 
@@ -205,20 +237,25 @@ class DoubanScraper:
             self.logger.error(f"解析书籍信息失败: {str(e)}")
             return None
 
-    def get_book_detail(self, douban_id: str) -> Optional[Dict[str, Any]]:
+    def get_book_detail(self, book_douban_url: str) -> Optional[Dict[str, Any]]:
         """
         获取书籍详细信息
         
         Args:
-            douban_id: 豆瓣书籍 ID
+            book_douban_url: 豆瓣书籍 URL
             
         Returns:
             Optional[Dict[str, Any]]: 书籍详细信息字典，获取失败则返回 None
         """
-        url = f"https://book.douban.com/subject/{douban_id}/"
         try:
-            self.logger.debug(f"获取书籍详情: {url}")
-            response = self.session.get(url, timeout=10)
+            self.logger.debug(f"获取书籍详情: {book_douban_url}")
+            # 随机延迟 2-5 秒
+            time.sleep(random.uniform(2, 5))
+            # 更新 User-Agent
+            self.headers['User-Agent'] = random.choice(USER_AGENTS)
+            response = requests.get(book_douban_url,
+                                  headers=self.headers,
+                                  timeout=10)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, 'lxml')

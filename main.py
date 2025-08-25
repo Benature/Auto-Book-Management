@@ -68,10 +68,12 @@ class DoubanZLibrary:
 
         # 初始化豆瓣爬虫
         douban_config = self.config_manager.get_douban_config()
+        zlib_config = self.config_manager.get_zlibrary_config()
         self.douban_scraper = DoubanScraper(
             cookie=douban_config.get('cookie'),
             user_id=douban_config.get('user_id'),
-            max_pages=douban_config.get('max_pages'))
+            max_pages=douban_config.get('max_pages'),
+            proxy=zlib_config.get('proxy_list', [None])[0])
 
         # 初始化 Z-Library 服务
         zlib_config = self.config_manager.get_zlibrary_config()
@@ -309,11 +311,58 @@ class DoubanZLibrary:
         """
         self.logger.info("开始同步豆瓣想读书单")
 
-        # 创建同步任务记录
+        # 获取豆瓣想读书单
+        books = self.douban_scraper.get_wish_list()
+        if not books:
+            self.logger.warning("未获取到豆瓣想读书单")
+            return
+
+        # 创建同步任务
         sync_task_id = self.db.create_sync_task()
 
-        # 获取豆瓣想读书单
-        books = self.fetch_douban_books()
+        # 将新书籍添加到数据库
+        with self.db.session_scope() as session:
+            for book in books:
+                existing_book = session.query(DoubanBook).filter(
+                    DoubanBook.douban_url == book['douban_url']).first()
+                if not existing_book:
+                    new_book = DoubanBook(
+                        title=book['title'],
+                        author=book['author'],
+                        isbn=book.get('isbn'),
+                        douban_id=book['douban_id'],
+                        douban_url=book['douban_url'],
+                        cover_url=book.get('cover_url'),
+                        publisher=book.get('publisher'),
+                        publish_date=book.get('publish_date'),
+                        status=BookStatus.NEW
+                    )
+                    session.add(new_book)
+                    self.logger.info(f"添加新书: {book['title']}")
+
+        # 获取状态为 NEW 的书籍的详细信息
+        with self.db.session_scope() as session:
+            new_books = session.query(DoubanBook).filter(
+                DoubanBook.status == BookStatus.NEW).all()
+            self.logger.info(f"发现 {len(new_books)} 本新书，开始获取详细信息")
+            for book in new_books:
+                try:
+                    book_detail = self.douban_scraper.get_book_detail(book.douban_url)
+                    if book_detail:
+                        book.isbn = book_detail.get('isbn', book.isbn)
+                        book.original_title = book_detail.get('original_title')
+                        book.subtitle = book_detail.get('subtitle')
+                        book.summary = book_detail.get('summary')
+                        book.status = BookStatus.WITH_DETAIL
+                        self.logger.info(f"获取书籍详细信息成功: {book.title}")
+                    else:
+                        self.logger.warning(f"获取书籍详细信息失败: {book.title}")
+                except Exception as e:
+                    self.logger.error(f"获取书籍详细信息出错: {book.title}, {str(e)}")
+
+            # 获取状态为 WITH_DETAIL 的书籍
+            books_to_search = session.query(DoubanBook).filter(
+                DoubanBook.status == BookStatus.WITH_DETAIL).all()
 
         if not books:
             self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
@@ -336,7 +385,7 @@ class DoubanZLibrary:
         # 更新同步任务信息
         self.db.update_sync_task(sync_task_id, {
             'status': 'running',
-            'total_books': len(books)
+            'total_books': len(books_to_search)
         })
 
         # 处理每本书
@@ -344,25 +393,15 @@ class DoubanZLibrary:
         failed_count = 0
         details = []
 
-        for book in books:
-            # 检查数据库中是否已存在
-            book_isbn = book.get('isbn', '')
-            book_title = book.get('title', '未知')
-            book_author = book.get('author', '未知')
+        for book in books_to_search:
+            # 获取书籍信息
+            book_isbn = book.isbn
+            book_title = book.title
+            book_author = book.author
 
             with self.db.session_scope() as session:
-                existing_book = None
-                if book_isbn:
-                    existing_book = session.query(DoubanBook).filter(
-                        DoubanBook.isbn == book_isbn).first()
-
-                if not existing_book:
-                    existing_book = session.query(DoubanBook).filter(
-                        DoubanBook.title == book_title,
-                        DoubanBook.author == book_author).first()
-
-                # 如果书籍已存在且已下载成功，跳过
-                if existing_book and existing_book.status == BookStatus.DOWNLOADED:
+                # 如果书籍已下载成功，跳过
+                if book.status == BookStatus.DOWNLOADED:
                     self.logger.info(f"书籍已存在且已下载: {book_title}")
                     success_count += 1
                     details.append({
@@ -374,25 +413,18 @@ class DoubanZLibrary:
                     })
                     continue
 
-                # 如果书籍不存在，创建记录
-                if not existing_book:
-                    existing_book = DoubanBook(
-                        title=book_title,
-                        author=book_author,
-                        isbn=book_isbn,
-                        douban_id=book.get('douban_id') or None,
-                        douban_url=book.get('url') or None,
-                        cover_url=book.get('cover_url') or None,
-                        publisher=book.get('publisher') or None,
-                        publish_date=book.get('publish_date') or None,
-                        status=BookStatus.NEW
-                    )
-                    session.add(existing_book)
-                    session.flush()
-
                 # 处理书籍
                 success, file_path, error_msg = self.process_book(
-                    book, existing_book.id)
+                    {
+                        'title': book_title,
+                        'author': book_author,
+                        'isbn': book_isbn,
+                        'douban_id': book.douban_id,
+                        'douban_url': book.douban_url,
+                        'cover_url': book.cover_url,
+                        'publisher': book.publisher,
+                        'publish_date': book.publish_date
+                    }, book.id)
 
                 # 更新书籍状态
                 if success:
@@ -464,13 +496,13 @@ class DoubanZLibrary:
 
         # 发送同步摘要通知
         if notify and self.lark_service:
-            self.lark_service.send_sync_summary(total=len(books),
+            self.lark_service.send_sync_summary(total=len(books_to_search),
                                                 success=success_count,
                                                 failed=failed_count,
                                                 details=details)
 
         self.logger.info(
-            f"同步完成: 总计 {len(books)} 本，成功 {success_count} 本，失败 {failed_count} 本"
+            f"同步完成: 总计 {len(books_to_search)} 本，成功 {success_count} 本，失败 {failed_count} 本"
         )
 
         return {
