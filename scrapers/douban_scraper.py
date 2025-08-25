@@ -55,27 +55,40 @@ class DoubanScraper:
 
         self.session = requests.Session()
         if self.proxy:
-            self.session.proxies = {
-                'http': self.proxy,
-                'https': self.proxy
-            }
+            self.session.proxies = {'http': self.proxy, 'https': self.proxy}
         self.session.headers.update({
-            'Cookie': cookie,
-            'User-Agent': user_agent or random.choice(USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'max-age=0',
-            'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"macOS"',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Sec-Fetch-User': '?1',
-            'Upgrade-Insecure-Requests': '1',
-            'Referer': self.base_url
+            'Cookie':
+            cookie,
+            'User-Agent':
+            user_agent or random.choice(USER_AGENTS),
+            'Accept':
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language':
+            'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Encoding':
+            'gzip, deflate, br',
+            'Connection':
+            'keep-alive',
+            'Cache-Control':
+            'max-age=0',
+            'Sec-Ch-Ua':
+            '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+            'Sec-Ch-Ua-Mobile':
+            '?0',
+            'Sec-Ch-Ua-Platform':
+            '"macOS"',
+            'Sec-Fetch-Dest':
+            'document',
+            'Sec-Fetch-Mode':
+            'navigate',
+            'Sec-Fetch-Site':
+            'same-origin',
+            'Sec-Fetch-User':
+            '?1',
+            'Upgrade-Insecure-Requests':
+            '1',
+            'Referer':
+            self.base_url
         })
 
         # self.headers = {
@@ -123,9 +136,8 @@ class DoubanScraper:
                     # 随机延迟 3-7 秒
                     time.sleep(random.uniform(3, 7))
                     # 更新 User-Agent
-                    self.session.headers.update({
-                        'User-Agent': random.choice(USER_AGENTS)
-                    })
+                    self.session.headers.update(
+                        {'User-Agent': random.choice(USER_AGENTS)})
                     response = self.session.get(url, timeout=15)
                     response.raise_for_status()
                     text = response.text
@@ -227,9 +239,9 @@ class DoubanScraper:
             }
 
             # 获取详细信息（ISBN 等）
-            detailed_info = self.get_book_detail(douban_url)
-            if detailed_info:
-                book_info.update(detailed_info)
+            # detailed_info = self.get_book_detail(douban_url)
+            # if detailed_info:
+            #     book_info.update(detailed_info)
 
             return book_info
 
@@ -237,7 +249,8 @@ class DoubanScraper:
             self.logger.error(f"解析书籍信息失败: {str(e)}")
             return None
 
-    def get_book_detail(self, book_douban_url: str) -> Optional[Dict[str, Any]]:
+    def get_book_detail(self,
+                        book_douban_url: str) -> Optional[Dict[str, Any]]:
         """
         获取书籍详细信息
         
@@ -254,8 +267,8 @@ class DoubanScraper:
             # 更新 User-Agent
             self.headers['User-Agent'] = random.choice(USER_AGENTS)
             response = requests.get(book_douban_url,
-                                  headers=self.headers,
-                                  timeout=10)
+                                    headers=self.headers,
+                                    timeout=10)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, 'lxml')
