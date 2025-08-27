@@ -31,7 +31,7 @@ from services.lark_service import LarkService
 from scheduler.task_scheduler import TaskScheduler
 
 
-class DoubanZLibrary:
+class DoubanZLibraryCalibre:
     """豆瓣 Z-Library 同步工具主类"""
 
     def __init__(self, config_path: str = "config.yaml"):
@@ -161,26 +161,6 @@ class DoubanZLibrary:
         # 启动调度器
         self.scheduler.start()
         self.logger.info("任务调度器设置完成并启动")
-
-    def fetch_douban_books(self) -> List[Dict[str, Any]]:
-        """
-        获取豆瓣想读书单
-        
-        Returns:
-            List[Dict[str, Any]]: 书籍信息列表
-        """
-        self.logger.info("开始获取豆瓣想读书单")
-
-        try:
-            # 获取想读书单
-            books = self.douban_scraper.get_wish_list()
-            self.logger.info(f"成功获取豆瓣想读书单，共 {len(books)} 本书")
-            return books
-
-        except Exception as e:
-            self.logger.error(f"获取豆瓣想读书单失败: {str(e)}")
-            traceback.print_exc()
-            return []
 
     def process_book(
             self,
@@ -327,11 +307,7 @@ class DoubanZLibrary:
             for book in books:
                 # 通过豆瓣URL、ISBN或标题和作者组合查找已存在的书籍
                 existing_book = session.query(DoubanBook).filter(
-                    (DoubanBook.douban_url == book['douban_url'])
-                    | ((DoubanBook.isbn != None)
-                       & (DoubanBook.isbn == book.get('isbn')))
-                    | ((DoubanBook.title == book['title'])
-                       & (DoubanBook.author == book['author']))).first()
+                    (DoubanBook.douban_url == book['douban_url'])).first()
 
                 if not existing_book:
                     new_book = DoubanBook(
@@ -371,8 +347,10 @@ class DoubanZLibrary:
                     self.logger.info(f"获取书籍详细信息成功: {book.title}")
 
             # 获取状态为 WITH_DETAIL 的书籍的ID列表
-            book_ids_to_search = [book.id for book in session.query(DoubanBook).filter(
-                DoubanBook.status == BookStatus.WITH_DETAIL).all()]
+            book_ids_to_search = [
+                book.id for book in session.query(DoubanBook).filter(
+                    DoubanBook.status == BookStatus.WITH_DETAIL).all()
+            ]
 
         if not books:
             self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
@@ -409,7 +387,7 @@ class DoubanZLibrary:
                 book = session.query(DoubanBook).get(book_id)
                 if not book:
                     continue
-                    
+
                 # 获取书籍信息
                 book_isbn = book.isbn
                 book_title = book.title
@@ -609,7 +587,7 @@ def main():
         return 1
 
     # 创建应用实例
-    app = DoubanZLibrary(args.config)
+    app = DoubanZLibraryCalibre(args.config)
 
     # 根据命令行参数执行相应操作
     if args.cleanup:

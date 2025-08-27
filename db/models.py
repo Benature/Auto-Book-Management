@@ -45,6 +45,8 @@ class DoubanBook(Base):
     douban_rating = Column(Float)
     cover_url = Column(String(255))
     description = Column(Text)
+    search_title = Column(String(255))
+    search_author = Column(String(255))
     status = Column(Enum(BookStatus), default=BookStatus.NEW, index=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
