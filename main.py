@@ -370,9 +370,9 @@ class DoubanZLibrary:
                     book.status = BookStatus.WITH_DETAIL
                     self.logger.info(f"获取书籍详细信息成功: {book.title}")
 
-            # 获取状态为 WITH_DETAIL 的书籍
-            books_to_search = session.query(DoubanBook).filter(
-                DoubanBook.status == BookStatus.WITH_DETAIL).all()
+            # 获取状态为 WITH_DETAIL 的书籍的ID列表
+            book_ids_to_search = [book.id for book in session.query(DoubanBook).filter(
+                DoubanBook.status == BookStatus.WITH_DETAIL).all()]
 
         if not books:
             self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
@@ -395,7 +395,7 @@ class DoubanZLibrary:
         # 更新同步任务信息
         self.db.update_sync_task(sync_task_id, {
             'status': 'running',
-            'total_books': len(books_to_search)
+            'total_books': len(book_ids_to_search)
         })
 
         # 处理每本书
@@ -403,13 +403,18 @@ class DoubanZLibrary:
         failed_count = 0
         details = []
 
-        for book in books_to_search:
-            # 获取书籍信息
-            book_isbn = book.isbn
-            book_title = book.title
-            book_author = book.author
-
+        for book_id in book_ids_to_search:
             with self.db.session_scope() as session:
+                # 重新获取书籍对象
+                book = session.query(DoubanBook).get(book_id)
+                if not book:
+                    continue
+                    
+                # 获取书籍信息
+                book_isbn = book.isbn
+                book_title = book.title
+                book_author = book.author
+
                 # 如果书籍已下载成功，跳过
                 if book.status == BookStatus.DOWNLOADED:
                     self.logger.info(f"书籍已存在且已下载: {book_title}")
@@ -439,12 +444,12 @@ class DoubanZLibrary:
                 # 更新书籍状态
                 if success:
                     # 状态已在 process_book 中更新为 DOWNLOADED 或 UPLOADED
-                    existing_book.last_check = datetime.now()
+                    book.last_check = datetime.now()
 
                     if file_path:
                         # 创建下载记录
                         download_record = DownloadRecord(
-                            book_id=existing_book.id,
+                            book_id=book.id,
                             file_path=file_path,
                             file_format=Path(file_path).suffix[1:]
                             if file_path else '',
@@ -471,9 +476,9 @@ class DoubanZLibrary:
                             },
                             download_status=True)
                 else:
-                    existing_book.status = BookStatus.SEARCH_NOT_FOUND
-                    existing_book.last_check = datetime.now()
-                    existing_book.error_message = error_msg
+                    book.status = BookStatus.SEARCH_NOT_FOUND
+                    book.last_check = datetime.now()
+                    book.error_message = error_msg
 
                     failed_count += 1
                     details.append({
@@ -506,18 +511,18 @@ class DoubanZLibrary:
 
         # 发送同步摘要通知
         if notify and self.lark_service:
-            self.lark_service.send_sync_summary(total=len(books_to_search),
+            self.lark_service.send_sync_summary(total=len(book_ids_to_search),
                                                 success=success_count,
                                                 failed=failed_count,
                                                 details=details)
 
         self.logger.info(
-            f"同步完成: 总计 {len(books_to_search)} 本，成功 {success_count} 本，失败 {failed_count} 本"
+            f"同步完成: 总计 {len(book_ids_to_search)} 本，成功 {success_count} 本，失败 {failed_count} 本"
         )
 
         return {
             'success': True,
-            'total': len(books),
+            'total': len(book_ids_to_search),
             'success_count': success_count,
             'failed_count': failed_count,
             'details': details
