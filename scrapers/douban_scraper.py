@@ -260,59 +260,52 @@ class DoubanScraper:
         Returns:
             Optional[Dict[str, Any]]: 书籍详细信息字典，获取失败则返回 None
         """
-        try:
-            self.logger.debug(f"获取书籍详情: {book_douban_url}")
-            # 随机延迟 2-5 秒
-            time.sleep(random.uniform(2, 5))
-            # 更新 User-Agent
-            self.headers['User-Agent'] = random.choice(USER_AGENTS)
-            response = requests.get(book_douban_url,
-                                    headers=self.headers,
-                                    timeout=10)
-            response.raise_for_status()
+        self.logger.debug(f"获取书籍详情: {book_douban_url}")
+        # 随机延迟 2-5 秒
+        time.sleep(random.uniform(2, 5))
+        # 更新 User-Agent
+        # self.headers['User-Agent'] = random.choice(USER_AGENTS)
+        response = self.session.get(book_douban_url, timeout=10)
+        response.raise_for_status()
 
-            soup = BeautifulSoup(response.text, 'lxml')
+        soup = BeautifulSoup(response.text, 'lxml')
 
-            # 获取 ISBN
-            isbn = ''
-            info_text = soup.select_one('#info').get_text() if soup.select_one(
-                '#info') else ''
-            isbn_match = re.search(r'ISBN:\s*(\d+)', info_text)
-            if isbn_match:
-                isbn = isbn_match.group(1)
+        # 获取 ISBN
+        isbn = ''
+        info_text = soup.select_one('#info').get_text() if soup.select_one(
+            '#info') else ''
+        isbn_match = re.search(r'ISBN:\s*(\d+)', info_text)
+        if isbn_match:
+            isbn = isbn_match.group(1)
 
-            # 获取原作名
-            original_title = ''
-            original_title_match = re.search(r'原作名:\s*([^\n]+)', info_text)
-            if original_title_match:
-                original_title = original_title_match.group(1).strip()
+        # 获取原作名
+        original_title = ''
+        original_title_match = re.search(r'原作名:\s*([^\n]+)', info_text)
+        if original_title_match:
+            original_title = original_title_match.group(1).strip()
 
-            # 获取副标题
-            subtitle = ''
-            subtitle_match = re.search(r'副标题:\s*([^\n]+)', info_text)
-            if subtitle_match:
-                subtitle = subtitle_match.group(1).strip()
+        # 获取副标题
+        subtitle = ''
+        subtitle_match = re.search(r'副标题:\s*([^\n]+)', info_text)
+        if subtitle_match:
+            subtitle = subtitle_match.group(1).strip()
 
-            # 获取内容简介
-            description = ''
-            intro_element = soup.select_one('div.intro')
-            if intro_element:
-                description = intro_element.get_text(strip=True)
+        # 获取内容简介
+        description = ''
+        intro_element = soup.select_one('div.intro')
+        if intro_element:
+            description = intro_element.get_text(strip=True)
 
-            # 避免请求过于频繁
-            time.sleep(random.uniform(0.8, 2.0))
+        # 避免请求过于频繁
+        time.sleep(random.uniform(0.8, 2.0))
 
-            return {
-                'isbn': isbn,
-                'original_title': original_title,
-                'subtitle': subtitle,
-                'description': description,
-                'status': BookStatus.WITH_DETAIL,
-            }
-
-        except Exception as e:
-            self.logger.error(f"获取书籍详情失败: {str(e)}")
-            return None
+        return {
+            'isbn': isbn,
+            'original_title': original_title,
+            'subtitle': subtitle,
+            'description': description,
+            'status': BookStatus.WITH_DETAIL,
+        }
 
     def run(self) -> List[Dict[str, Any]]:
         """

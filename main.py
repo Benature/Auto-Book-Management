@@ -320,11 +320,19 @@ class DoubanZLibrary:
         # 创建同步任务
         sync_task_id = self.db.create_sync_task()
 
-        # 将新书籍添加到数据库
+        # 检查并添加新书籍到数据库
+        new_books_count = 0
+        existing_books_count = 0
         with self.db.session_scope() as session:
             for book in books:
+                # 通过豆瓣URL、ISBN或标题和作者组合查找已存在的书籍
                 existing_book = session.query(DoubanBook).filter(
-                    DoubanBook.douban_url == book['douban_url']).first()
+                    (DoubanBook.douban_url == book['douban_url'])
+                    | ((DoubanBook.isbn != None)
+                       & (DoubanBook.isbn == book.get('isbn')))
+                    | ((DoubanBook.title == book['title'])
+                       & (DoubanBook.author == book['author']))).first()
+
                 if not existing_book:
                     new_book = DoubanBook(
                         title=book['title'],
@@ -335,10 +343,16 @@ class DoubanZLibrary:
                         cover_url=book.get('cover_url'),
                         publisher=book.get('publisher'),
                         publish_date=book.get('publish_date'),
-                        status=BookStatus.NEW
-                    )
+                        status=BookStatus.NEW)
                     session.add(new_book)
+                    new_books_count += 1
                     self.logger.info(f"添加新书: {book['title']}")
+                else:
+                    existing_books_count += 1
+                    self.logger.info(f"书籍已存在: {book['title']}")
+
+            self.logger.info(
+                f"本次同步: 新增 {new_books_count} 本书，已存在 {existing_books_count} 本书")
 
         # 获取状态为 NEW 的书籍的详细信息
         with self.db.session_scope() as session:
@@ -346,19 +360,15 @@ class DoubanZLibrary:
                 DoubanBook.status == BookStatus.NEW).all()
             self.logger.info(f"发现 {len(new_books)} 本新书，开始获取详细信息")
             for book in new_books:
-                try:
-                    book_detail = self.douban_scraper.get_book_detail(book.douban_url)
-                    if book_detail:
-                        book.isbn = book_detail.get('isbn', book.isbn)
-                        book.original_title = book_detail.get('original_title')
-                        book.subtitle = book_detail.get('subtitle')
-                        book.summary = book_detail.get('summary')
-                        book.status = BookStatus.WITH_DETAIL
-                        self.logger.info(f"获取书籍详细信息成功: {book.title}")
-                    else:
-                        self.logger.warning(f"获取书籍详细信息失败: {book.title}")
-                except Exception as e:
-                    self.logger.error(f"获取书籍详细信息出错: {book.title}, {str(e)}")
+                book_detail = self.douban_scraper.get_book_detail(
+                    book.douban_url)
+                if book_detail:
+                    book.isbn = book_detail.get('isbn', book.isbn)
+                    book.original_title = book_detail.get('original_title')
+                    book.subtitle = book_detail.get('subtitle')
+                    book.summary = book_detail.get('summary')
+                    book.status = BookStatus.WITH_DETAIL
+                    self.logger.info(f"获取书籍详细信息成功: {book.title}")
 
             # 获取状态为 WITH_DETAIL 的书籍
             books_to_search = session.query(DoubanBook).filter(
@@ -436,10 +446,10 @@ class DoubanZLibrary:
                         download_record = DownloadRecord(
                             book_id=existing_book.id,
                             file_path=file_path,
-                            file_format=Path(file_path).suffix[1:] if file_path else '',
+                            file_format=Path(file_path).suffix[1:]
+                            if file_path else '',
                             source='zlibrary',
-                            sync_task_id=sync_task_id
-                        )
+                            sync_task_id=sync_task_id)
                         session.add(download_record)
 
                     success_count += 1
