@@ -48,6 +48,7 @@ class DoubanBook(Base):
     search_title = Column(String(255))
     search_author = Column(String(255))
     status = Column(Enum(BookStatus), default=BookStatus.NEW, index=True)
+    zlib_dl_url = Column(String(255))
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -55,6 +56,13 @@ class DoubanBook(Base):
     download_records = relationship("DownloadRecord",
                                     back_populates="book",
                                     cascade="all, delete-orphan")
+    zlibrary_books = relationship("ZLibraryBook",
+                                  back_populates="douban_book",
+                                  cascade="all, delete-orphan")
+    status_history = relationship("BookStatusHistory",
+                                 back_populates="book",
+                                 cascade="all, delete-orphan",
+                                 order_by="BookStatusHistory.created_at")
 
     def __repr__(self):
         return f"<DoubanBook(id={self.id}, title='{self.title}', author='{self.author}', status='{self.status.value if self.status else 'None'}')>"
@@ -102,3 +110,58 @@ class SyncTask(Base):
 
     def __repr__(self):
         return f"<SyncTask(id={self.id}, status='{self.status}', start_time='{self.start_time}')>"
+
+
+class ZLibraryBook(Base):
+    """Z-Library书籍数据模型"""
+    __tablename__ = 'zlibrary_books'
+
+    id = Column(Integer, primary_key=True)
+    zlibrary_id = Column(String(50), index=True)  # Z-Library中的书籍ID
+    douban_id = Column(String(20), ForeignKey('douban_books.douban_id'), nullable=False, index=True)  # 关联豆瓣书籍
+    title = Column(String(255), nullable=False, index=True)
+    author = Column(String(255), index=True)
+    publisher = Column(String(255))
+    year = Column(String(10))
+    language = Column(String(50))
+    isbn = Column(String(20))
+    file_format = Column(String(10))  # epub, mobi, pdf 等
+    file_size = Column(Integer)  # 文件大小（字节）
+    download_url = Column(String(500))  # Z-Library下载链接
+    mirror_url = Column(String(500))   # 镜像链接
+    quality_score = Column(Float)  # 质量评分
+    download_count = Column(Integer, default=0)  # 下载次数统计
+    is_available = Column(Boolean, default=True)  # 是否可用
+    last_checked = Column(DateTime)  # 最后检查时间
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # 关联关系
+    douban_book = relationship("DoubanBook", back_populates="zlibrary_books")
+
+    def __repr__(self):
+        return f"<ZLibraryBook(id={self.id}, zlibrary_id='{self.zlibrary_id}', title='{self.title}', format='{self.file_format}')>"
+
+
+class BookStatusHistory(Base):
+    """书籍状态变更历史数据模型"""
+    __tablename__ = 'book_status_history'
+
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('douban_books.id'), nullable=False, index=True)  # 关联豆瓣书籍
+    old_status = Column(Enum(BookStatus), index=True)  # 原状态
+    new_status = Column(Enum(BookStatus), nullable=False, index=True)  # 新状态
+    change_reason = Column(String(255))  # 状态变更原因
+    error_message = Column(Text)  # 错误信息（如果有）
+    sync_task_id = Column(Integer, ForeignKey('sync_tasks.id'))  # 关联的同步任务
+    processing_time = Column(Float)  # 处理耗时（秒）
+    retry_count = Column(Integer, default=0)  # 重试次数
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    
+    # 关联关系
+    book = relationship("DoubanBook", back_populates="status_history")
+    sync_task = relationship("SyncTask")
+
+    def __repr__(self):
+        old_status_str = self.old_status.value if self.old_status else None
+        return f"<BookStatusHistory(id={self.id}, book_id={self.book_id}, {old_status_str} -> {self.new_status.value})>"

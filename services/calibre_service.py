@@ -166,51 +166,9 @@ class CalibreService:
         Returns:
             Optional[Dict[str, Any]]: 最佳匹配的书籍，如果没有找到则返回 None
         """
-        # 搜索书籍
-        results = self.search_book(title, author, isbn)
-
-        if not results:
-            return None
-
-        # 如果有 ISBN 匹配，直接返回第一个结果
-        if isbn:
-            for result in results:
-                if result.get('isbn') == isbn:
-                    self.logger.info(f"找到 ISBN 匹配: {result['title']}")
-                    return result
-
-        # 计算标题和作者的匹配度
-        best_match = None
-        best_score = 0
-
-        for result in results:
-            score = 0
-
-            # 标题匹配度（简单字符串相似度）
-            title_similarity = self._calculate_similarity(
-                title.lower(), result['title'].lower())
-            score += title_similarity * 0.7  # 标题权重 70%
-
-            # 作者匹配度
-            if author and result.get('author'):
-                author_similarity = self._calculate_similarity(
-                    author.lower(), result['author'].lower())
-                score += author_similarity * 0.3  # 作者权重 30%
-
-            if score > best_score:
-                best_score = score
-                best_match = result
-
-        # 如果最佳匹配的分数超过阈值，返回该结果
-        if best_match and best_score >= self.match_threshold:
-            self.logger.info(
-                f"找到最佳匹配: {best_match['title']}, 分数: {best_score:.2f}")
-            return best_match
-        else:
-            self.logger.info(
-                f"未找到满足阈值的匹配，最佳分数: {best_score:.2f}, 阈值: {self.match_threshold}"
-            )
-            return None
+        # TODO: Calibre接口未完全开发完成，临时返回None（表示未找到匹配书籍）
+        self.logger.info(f"Calibre临时查询: {title} - {author} - {isbn} (临时返回未找到)")
+        return None
 
     def _calculate_similarity(self, str1: str, str2: str) -> float:
         """
@@ -249,53 +207,6 @@ class CalibreService:
         Returns:
             Optional[int]: 上传成功后的书籍 ID，上传失败则返回 None
         """
-        try:
-            file_path = Path(file_path)
-            if not file_path.exists():
-                self.logger.error(f"上传失败: 文件不存在 {file_path}")
-                return None
-
-            self.logger.info(f"开始上传书籍: {file_path.name}")
-
-            # 准备上传请求
-            url = f"{self.server_url}/cdb/add-book/default"
-            files = {
-                'file': (file_path.name, open(file_path, 'rb'),
-                         f'application/{file_path.suffix[1:]}')
-            }
-
-            # 如果有元数据，添加到请求中
-            data = {}
-            if metadata:
-                if 'title' in metadata:
-                    data['title'] = metadata['title']
-                if 'author' in metadata:
-                    data['authors'] = metadata['author']
-                if 'isbn' in metadata and metadata['isbn']:
-                    data['isbn'] = metadata['isbn']
-
-            # 发送上传请求
-            response = self.session.post(url,
-                                         files=files,
-                                         data=data,
-                                         timeout=60)
-            response.raise_for_status()
-            result = response.json()
-
-            if 'book_id' in result:
-                book_id = result['book_id']
-                self.logger.info(f"上传成功: {file_path.name}, ID: {book_id}")
-                return book_id
-            else:
-                self.logger.error(f"上传失败: {file_path.name}, 响应: {result}")
-                return None
-
-        except Exception as e:
-            self.logger.error(
-                f"上传书籍失败: {file_path.name if file_path else 'Unknown'}, 错误: {str(e)}"
-            )
-            return None
-        finally:
-            # 确保文件已关闭
-            if 'files' in locals() and 'file' in files:
-                files['file'][1].close()
+        # TODO: Calibre接口未完全开发完成，临时返回None（表示上传失败）
+        self.logger.info(f"Calibre临时上传: {file_path} (临时返回上传失败)")
+        return None

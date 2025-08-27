@@ -14,6 +14,23 @@ from logging.handlers import TimedRotatingFileHandler
 from typing import Optional
 
 
+def generate_log_path(base_dir: str = "logs") -> str:
+    """
+    生成日志文件路径
+    格式: logs/yyyymmdd/applog-yyyymmddhhmmss.log
+    
+    Args:
+        base_dir: 日志基础目录
+        
+    Returns:
+        str: 完整的日志文件路径
+    """
+    now = datetime.now()
+    date_dir = now.strftime("%Y%m%d")
+    log_filename = f"applog-{now.strftime('%Y%m%d%H%M%S')}.log"
+    return os.path.join(base_dir, date_dir, log_filename)
+
+
 def setup_logger(log_level: int = logging.DEBUG,
                  log_file: Optional[str] = None,
                  console: bool = True,

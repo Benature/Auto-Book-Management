@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import List, Optional, Dict, Any, Generator, Tuple
 import logging
 
-from .models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus
+from .models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus, ZLibraryBook, BookStatusHistory
 from utils.logger import get_logger
 import sqlite3
 from pathlib import Path
@@ -351,3 +351,232 @@ class Database:
                     DoubanBook.status == BookStatus.FAILED).count(),
             }
             return stats
+
+    # ZLibraryBook 相关操作
+    def add_zlibrary_book(self, book_data: Dict[str, Any]) -> ZLibraryBook:
+        """
+        添加Z-Library书籍记录
+        
+        Args:
+            book_data: Z-Library书籍数据字典
+            
+        Returns:
+            ZLibraryBook: 添加的Z-Library书籍对象
+        """
+        with self.session_scope() as session:
+            zlibrary_book = ZLibraryBook(**book_data)
+            session.add(zlibrary_book)
+            session.flush()
+            self.logger.info(f"添加Z-Library书籍: {zlibrary_book.title} (ID: {zlibrary_book.id})")
+            return zlibrary_book
+
+    def get_zlibrary_books_by_douban_id(self, douban_id: str) -> List[ZLibraryBook]:
+        """
+        根据豆瓣ID获取Z-Library书籍列表
+        
+        Args:
+            douban_id: 豆瓣书籍ID
+            
+        Returns:
+            List[ZLibraryBook]: Z-Library书籍对象列表
+        """
+        with self.session_scope() as session:
+            return session.query(ZLibraryBook).filter(
+                ZLibraryBook.douban_id == douban_id).all()
+
+    def get_zlibrary_book_by_id(self, zlibrary_id: str, douban_id: str = None) -> Optional[ZLibraryBook]:
+        """
+        根据Z-Library ID获取书籍记录
+        
+        Args:
+            zlibrary_id: Z-Library书籍ID
+            douban_id: 豆瓣书籍ID (可选，用于进一步筛选)
+            
+        Returns:
+            Optional[ZLibraryBook]: Z-Library书籍对象，如果不存在则返回 None
+        """
+        with self.session_scope() as session:
+            query = session.query(ZLibraryBook).filter(
+                ZLibraryBook.zlibrary_id == zlibrary_id)
+            if douban_id:
+                query = query.filter(ZLibraryBook.douban_id == douban_id)
+            return query.first()
+
+    def update_zlibrary_book(self, book_id: int, book_data: Dict[str, Any]) -> None:
+        """
+        更新Z-Library书籍信息
+        
+        Args:
+            book_id: Z-Library书籍ID
+            book_data: 书籍数据字典
+        """
+        with self.session_scope() as session:
+            book = session.query(ZLibraryBook).filter(
+                ZLibraryBook.id == book_id).first()
+            if book:
+                for key, value in book_data.items():
+                    if hasattr(book, key):
+                        setattr(book, key, value)
+                self.logger.info(f"更新Z-Library书籍信息: {book.title} (ID: {book.id})")
+            else:
+                self.logger.warning(f"尝试更新不存在的Z-Library书籍: ID {book_id}")
+
+    def get_best_zlibrary_book(self, douban_id: str, format_priority: List[str] = None) -> Optional[ZLibraryBook]:
+        """
+        根据优先级获取最佳的Z-Library书籍
+        
+        Args:
+            douban_id: 豆瓣书籍ID
+            format_priority: 格式优先级列表，例如 ['epub', 'mobi', 'pdf']
+            
+        Returns:
+            Optional[ZLibraryBook]: 最佳匹配的Z-Library书籍对象
+        """
+        with self.session_scope() as session:
+            books = session.query(ZLibraryBook).filter(
+                ZLibraryBook.douban_id == douban_id,
+                ZLibraryBook.is_available == True
+            ).all()
+            
+            if not books:
+                return None
+            
+            # 如果有格式优先级，按优先级排序
+            if format_priority:
+                def format_priority_score(book):
+                    try:
+                        return format_priority.index(book.file_format.lower())
+                    except (ValueError, AttributeError):
+                        return len(format_priority)  # 未知格式排在最后
+                
+                books.sort(key=format_priority_score)
+            
+            # 按质量评分排序（如果有的话）
+            books.sort(key=lambda x: x.quality_score or 0, reverse=True)
+            
+            return books[0]
+
+    # BookStatusHistory 相关操作
+    def add_status_history(self, book_id: int, old_status: Optional[BookStatus], 
+                          new_status: BookStatus, change_reason: str = None, 
+                          error_message: str = None, sync_task_id: int = None, 
+                          processing_time: float = None, retry_count: int = 0) -> BookStatusHistory:
+        """
+        添加状态变更历史记录
+        
+        Args:
+            book_id: 书籍ID
+            old_status: 原状态
+            new_status: 新状态
+            change_reason: 变更原因
+            error_message: 错误信息
+            sync_task_id: 同步任务ID
+            processing_time: 处理耗时
+            retry_count: 重试次数
+            
+        Returns:
+            BookStatusHistory: 创建的历史记录对象
+        """
+        with self.session_scope() as session:
+            history = BookStatusHistory(
+                book_id=book_id,
+                old_status=old_status,
+                new_status=new_status,
+                change_reason=change_reason,
+                error_message=error_message,
+                sync_task_id=sync_task_id,
+                processing_time=processing_time,
+                retry_count=retry_count
+            )
+            session.add(history)
+            session.flush()
+            self.logger.info(f"添加状态历史: 书籍{book_id} {old_status.value if old_status else 'None'} -> {new_status.value}")
+            return history
+
+    def update_book_status_with_history(self, book_id: int, new_status: BookStatus, 
+                                       change_reason: str = None, error_message: str = None, 
+                                       sync_task_id: int = None, processing_time: float = None, 
+                                       retry_count: int = 0) -> None:
+        """
+        更新书籍状态并记录历史
+        
+        Args:
+            book_id: 书籍ID
+            new_status: 新状态
+            change_reason: 变更原因
+            error_message: 错误信息
+            sync_task_id: 同步任务ID
+            processing_time: 处理耗时
+            retry_count: 重试次数
+        """
+        with self.session_scope() as session:
+            book = session.query(DoubanBook).filter(DoubanBook.id == book_id).first()
+            if book:
+                old_status = book.status
+                book.status = new_status
+                
+                # 创建历史记录
+                history = BookStatusHistory(
+                    book_id=book_id,
+                    old_status=old_status,
+                    new_status=new_status,
+                    change_reason=change_reason,
+                    error_message=error_message,
+                    sync_task_id=sync_task_id,
+                    processing_time=processing_time,
+                    retry_count=retry_count
+                )
+                session.add(history)
+                
+                self.logger.info(f"更新书籍状态: {book.title} (ID: {book.id}) {old_status.value if old_status else 'None'} -> {new_status.value}")
+            else:
+                self.logger.warning(f"尝试更新不存在的书籍状态: ID {book_id}")
+
+    def get_book_status_history(self, book_id: int) -> List[BookStatusHistory]:
+        """
+        获取书籍的状态历史
+        
+        Args:
+            book_id: 书籍ID
+            
+        Returns:
+            List[BookStatusHistory]: 状态历史列表
+        """
+        with self.session_scope() as session:
+            return session.query(BookStatusHistory).filter(
+                BookStatusHistory.book_id == book_id
+            ).order_by(BookStatusHistory.created_at).all()
+
+    def get_status_statistics(self) -> Dict[str, Any]:
+        """
+        获取状态统计信息
+        
+        Returns:
+            Dict[str, Any]: 状态统计数据
+        """
+        with self.session_scope() as session:
+            # 当前状态分布
+            current_status = {}
+            for status in BookStatus:
+                count = session.query(DoubanBook).filter(DoubanBook.status == status).count()
+                current_status[status.value] = count
+            
+            # 今日状态变更统计
+            from datetime import datetime, timedelta
+            today = datetime.now().date()
+            today_changes = session.query(BookStatusHistory).filter(
+                BookStatusHistory.created_at >= datetime.combine(today, datetime.min.time())
+            ).count()
+            
+            # 失败状态的书籍（带错误信息）
+            failed_books = session.query(BookStatusHistory).filter(
+                BookStatusHistory.new_status == BookStatus.SEARCH_NOT_FOUND,
+                BookStatusHistory.error_message.isnot(None)
+            ).count()
+            
+            return {
+                'current_status': current_status,
+                'today_changes': today_changes,
+                'failed_books': failed_books,
+                'total_books': session.query(DoubanBook).count()
+            }

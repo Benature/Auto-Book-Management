@@ -11,6 +11,7 @@ nest_asyncio.apply()  # 让 jupyter 正常运行非 jupyter 环境的异步代�
 
 import os
 import time
+import random
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import logging
@@ -32,7 +33,9 @@ class ZLibraryService:
                  format_priority: List[str],
                  proxy_list: List[str],
                  download_dir: str,
-                 max_retries: int = 3):
+                 max_retries: int = 3,
+                 min_delay: float = 1.0,
+                 max_delay: float = 3.0):
         """
         初始化 Z-Library 服务
         
@@ -42,10 +45,16 @@ class ZLibraryService:
             format_priority: 下载格式优先级列表
             download_dir: 下载目录
             max_retries: 最大重试次数
+            min_delay: 最小延迟时间（秒）
+            max_delay: 最大延迟时间（秒）
         """
         self.logger = get_logger("zlibrary_service")
         self.__email = email
         self.__password = password
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.consecutive_errors = 0  # 连续错误计数
+        self.request_count = 0  # 请求计数
         self.format_priority = format_priority
         self.proxy_list = proxy_list
         self.download_dir = Path(download_dir)
@@ -57,12 +66,69 @@ class ZLibraryService:
         # 确保下载目录存在
         os.makedirs(self.download_dir, exist_ok=True)
 
+    def ensure_connected(self) -> bool:
+        """
+        确保Z-Library客户端已连接
+        
+        Returns:
+            bool: 连接状态
+        """
+        try:
+            if self.lib is None:
+                self._init_client()
+            return True
+        except Exception as e:
+            self.logger.error(f"Z-Library连接失败: {str(e)}")
+            return False
+
     def _init_client(self):
         """
         初始化Z-Library客户端
         """
         self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
         asyncio.run(self.lib.login(self.__email, self.__password))
+
+    def _smart_delay(self, base_min: float = None, base_max: float = None, 
+                     request_type: str = "normal") -> None:
+        """
+        智能延迟，根据请求类型、错误次数和请求频率动态调整延迟
+        
+        Args:
+            base_min: 基础最小延迟时间
+            base_max: 基础最大延迟时间  
+            request_type: 请求类型 ("search", "download", "normal", "error")
+        """
+        # 使用传入的延迟时间或默认值
+        min_delay = base_min or self.min_delay
+        max_delay = base_max or self.max_delay
+        
+        # 根据请求类型调整延迟
+        if request_type == "search":
+            # 搜索请求需要适中延迟
+            min_delay = max(min_delay * 1.5, 2.0)
+            max_delay = max(max_delay * 1.5, 4.0)
+        elif request_type == "download": 
+            # 下载请求需要更长延迟
+            min_delay = max(min_delay * 2, 3.0)
+            max_delay = max(max_delay * 2, 6.0)
+        
+        # 根据连续错误增加延迟
+        if self.consecutive_errors > 0:
+            error_multiplier = min(1.5 ** self.consecutive_errors, 4.0)  # 最多4倍延迟
+            min_delay *= error_multiplier
+            max_delay *= error_multiplier
+            self.logger.warning(f"Z-Library连续错误 {self.consecutive_errors} 次，增加延迟至 {min_delay:.1f}-{max_delay:.1f}秒")
+        
+        # 根据请求频率适当增加延迟（每5个请求后稍微增加延迟）
+        if self.request_count > 0 and self.request_count % 5 == 0:
+            frequency_multiplier = 1.3
+            min_delay *= frequency_multiplier
+            max_delay *= frequency_multiplier
+        
+        # 生成随机延迟并执行
+        delay = random.uniform(min_delay, max_delay)
+        self.logger.debug(f"Z-Library延迟 {delay:.2f} 秒 (类型: {request_type}, 错误: {self.consecutive_errors}, 请求: {self.request_count})")
+        time.sleep(delay)
 
     def search_books(self,
                      title: str = None,
@@ -91,12 +157,26 @@ class ZLibraryService:
 
         assert query, "搜索查询不能为空"
 
-        # 调用客户端的search方法
-        paginator = asyncio.run(self.lib.search(q=query))
-        # 获取第一页结果
-        first_set = asyncio.run(paginator.next())
-        # 处理搜索结果
-        return self._process_search_results(first_set)
+        try:
+            # 搜索前智能延迟
+            self._smart_delay(request_type="search")
+            self.request_count += 1
+            
+            # 调用客户端的search方法
+            paginator = asyncio.run(self.lib.search(q=query))
+            # 获取第一页结果
+            first_set = asyncio.run(paginator.next())
+            
+            # 搜索成功，重置错误计数
+            self.consecutive_errors = 0
+            
+            # 处理搜索结果
+            return self._process_search_results(first_set)
+        except Exception as e:
+            self.logger.error(f"搜索失败: {str(e)}")
+            self.consecutive_errors += 1
+            self._smart_delay(base_min=3.0, base_max=6.0, request_type="error")
+            return []
 
     def _process_search_results(self,
                                 results: List[Any]) -> List[Dict[str, Any]]:
@@ -287,8 +367,15 @@ class ZLibraryService:
                     self.logger.error("书籍信息中缺少ID，无法下载")
                     return None
 
+                # 下载前智能延迟
+                self._smart_delay(request_type="download")
+                self.request_count += 1
+                
                 # 调用客户端的download方法
                 self.lib.download(book_id)
+                
+                # 下载成功，重置错误计数
+                self.consecutive_errors = 0
 
                 if hasattr(self.lib.download, 'return_value'):
                     download_result = self.lib.download.return_value
@@ -311,7 +398,8 @@ class ZLibraryService:
             except Exception as e:
                 self.logger.error(
                     f"下载过程中出错 (尝试 {attempt}/{self.max_retries}): {str(e)}")
-                time.sleep(2)  # 等待一段时间再重试
+                self.consecutive_errors += 1
+                self._smart_delay(base_min=2.0, base_max=5.0, request_type="error")  # 等待一段时间再重试
 
         self.logger.error(f"下载失败，已达到最大重试次数 {self.max_retries}")
         return None

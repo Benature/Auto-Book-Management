@@ -34,7 +34,9 @@ class DoubanScraper:
                  user_agent: str = None,
                  max_pages: int = None,
                  user_id: int | str = None,
-                 proxy: str = None):
+                 proxy: str = None,
+                 min_delay: float = 1.0,
+                 max_delay: float = 3.0):
         """
         初始化爬虫
         
@@ -43,11 +45,17 @@ class DoubanScraper:
             user_agent: 用户代理字符串
             max_pages: 最大爬取页数，0 表示不限制
             proxy: 代理服务器地址，格式为 http://host:port 或 socks5://host:port
+            min_delay: 最小延迟时间（秒）
+            max_delay: 最大延迟时间（秒）
         """
         self.logger = get_logger("douban_scraper")
         self.cookie = cookie
         self.max_pages = max_pages
         self.proxy = proxy
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.consecutive_errors = 0  # 连续错误计数
+        self.request_count = 0  # 请求计数
 
         assert cookie is not None, "cookie 不可为空"
         self.user_id = self.get_user_id(user_id, cookie)
@@ -111,6 +119,48 @@ class DoubanScraper:
         assert user_id, "cookie 缺少 user_id 信息（dbcl2）"
         return str(user_id)
 
+    def _smart_delay(self, base_min: float = None, base_max: float = None, 
+                     request_type: str = "normal") -> None:
+        """
+        智能延迟，根据请求类型、错误次数和请求频率动态调整延迟
+        
+        Args:
+            base_min: 基础最小延迟时间
+            base_max: 基础最大延迟时间  
+            request_type: 请求类型 ("page", "detail", "normal")
+        """
+        # 使用传入的延迟时间或默认值
+        min_delay = base_min or self.min_delay
+        max_delay = base_max or self.max_delay
+        
+        # 根据请求类型调整延迟
+        if request_type == "page":
+            # 页面请求需要更长延迟
+            min_delay = max(min_delay * 2, 3.0)
+            max_delay = max(max_delay * 2, 7.0)
+        elif request_type == "detail": 
+            # 详情页请求中等延迟
+            min_delay = max(min_delay * 1.5, 2.0)
+            max_delay = max(max_delay * 1.5, 5.0)
+        
+        # 根据连续错误增加延迟
+        if self.consecutive_errors > 0:
+            error_multiplier = min(1.5 ** self.consecutive_errors, 5.0)  # 最多5倍延迟
+            min_delay *= error_multiplier
+            max_delay *= error_multiplier
+            self.logger.warning(f"连续错误 {self.consecutive_errors} 次，增加延迟至 {min_delay:.1f}-{max_delay:.1f}秒")
+        
+        # 根据请求频率适当增加延迟（每10个请求后稍微增加延迟）
+        if self.request_count > 0 and self.request_count % 10 == 0:
+            frequency_multiplier = 1.2
+            min_delay *= frequency_multiplier
+            max_delay *= frequency_multiplier
+        
+        # 生成随机延迟并执行
+        delay = random.uniform(min_delay, max_delay)
+        self.logger.debug(f"延迟 {delay:.2f} 秒 (类型: {request_type}, 错误: {self.consecutive_errors}, 请求: {self.request_count})")
+        time.sleep(delay)
+
     def get_wish_list(self) -> List[Dict[str, Any]]:
         """
         获取「想读」书单
@@ -126,23 +176,32 @@ class DoubanScraper:
         with Progress() as progress:
             page_task = progress.add_task(
                 "页进度", total=self.max_pages if self.max_pages else None)
-            item_task = progress.add_task(f"第{page}页条目")
+            # item_task = progress.add_task(f"第{page}页条目")
             while has_next and (self.max_pages is None or self.max_pages == 0
                                 or page < self.max_pages):
                 page += 1
                 url = f"https://book.douban.com/people/{self.user_id}/wish?start={(page-1)*15}&sort=time&rating=all&filter=all&mode=grid"
                 try:
                     self.logger.info(f"爬取第 {page} 页: {url}")
-                    # 随机延迟 3-7 秒
-                    time.sleep(random.uniform(3, 7))
+                    # 智能延迟
+                    self._smart_delay(request_type="page")
                     # 更新 User-Agent
                     self.session.headers.update(
                         {'User-Agent': random.choice(USER_AGENTS)})
+                    
+                    self.request_count += 1
                     response = self.session.get(url, timeout=15)
                     response.raise_for_status()
                     text = response.text
+                    
+                    # 请求成功，重置错误计数
+                    self.consecutive_errors = 0
+                    
                 except requests.RequestException as e:
                     self.logger.error(f"请求失败: {str(e)}")
+                    self.consecutive_errors += 1
+                    # 出错时额外延迟
+                    self._smart_delay(base_min=5.0, base_max=10.0, request_type="error")
                     break
 
                 soup = BeautifulSoup(text, 'lxml')
@@ -153,12 +212,12 @@ class DoubanScraper:
                     has_next = False
                     break
 
-                progress.update(item_task, total=len(items), completed=0)
+                # progress.update(item_task, total=len(items), completed=0)
                 for item in items:
                     book_info = self.parse_book_info(item)
                     if book_info:
                         books.append(book_info)
-                    progress.update(item_task, advance=1)
+                    # progress.update(item_task, advance=1)
                 # progress.remove_task(item_task)
 
                 next_link = soup.select_one('span.next a')
@@ -166,8 +225,8 @@ class DoubanScraper:
 
                 progress.update(page_task, advance=1)
 
-                # 避免请求过于频繁
-                time.sleep(random.uniform(1.5, 3.5))
+                # 页面处理完成后的智能延迟
+                self._smart_delay(request_type="normal")
 
         self.logger.info(f"爬取完成，共获取 {len(books)} 本书")
         return books
@@ -261,12 +320,26 @@ class DoubanScraper:
             Optional[Dict[str, Any]]: 书籍详细信息字典，获取失败则返回 None
         """
         self.logger.debug(f"获取书籍详情: {book_douban_url}")
-        # 随机延迟 2-5 秒
-        time.sleep(random.uniform(2, 5))
-        # 更新 User-Agent
-        # self.headers['User-Agent'] = random.choice(USER_AGENTS)
-        response = self.session.get(book_douban_url, timeout=10)
-        response.raise_for_status()
+        
+        try:
+            # 智能延迟
+            self._smart_delay(request_type="detail")
+            # 更新 User-Agent
+            self.session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
+            
+            self.request_count += 1
+            response = self.session.get(book_douban_url, timeout=10)
+            response.raise_for_status()
+            
+            # 请求成功，重置错误计数
+            self.consecutive_errors = 0
+            
+        except requests.RequestException as e:
+            self.logger.error(f"获取书籍详情失败: {str(e)}")
+            self.consecutive_errors += 1
+            # 出错时额外延迟后返回None
+            self._smart_delay(base_min=5.0, base_max=10.0, request_type="error")
+            return None
 
         soup = BeautifulSoup(response.text, 'lxml')
 
@@ -296,8 +369,8 @@ class DoubanScraper:
         if intro_element:
             description = intro_element.get_text(strip=True)
 
-        # 避免请求过于频繁
-        time.sleep(random.uniform(0.8, 2.0))
+        # 详情处理完成后的智能延迟
+        self._smart_delay(base_min=0.8, base_max=2.0, request_type="normal")
 
         return {
             'isbn': isbn,

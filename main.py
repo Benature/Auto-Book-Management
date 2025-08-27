@@ -46,8 +46,15 @@ class DoubanZLibraryCalibre:
 
         # 设置日志
         import logging
+        from utils.logger import generate_log_path
         log_config = self.config_manager.get_logging_config()
-        log_file = log_config.get('file', 'logs/app.log')
+        
+        # 使用新的日志路径格式，除非配置文件中明确指定了路径
+        if 'file' in log_config and log_config['file'] != 'logs/app.log':
+            log_file = log_config['file']  # 使用用户指定的路径
+        else:
+            log_file = generate_log_path()  # 使用新的格式
+            
         log_level = log_config.get('level', 'INFO')
         log_level_value = getattr(logging, log_level.upper(), logging.INFO)
         setup_logger(log_level_value, log_file)
@@ -73,7 +80,9 @@ class DoubanZLibraryCalibre:
             cookie=douban_config.get('cookie'),
             user_id=douban_config.get('user_id'),
             max_pages=douban_config.get('max_pages'),
-            proxy=zlib_config.get('proxy_list', [None])[0])
+            proxy=zlib_config.get('proxy_list', [None])[0],
+            min_delay=douban_config.get('min_delay', 1.0),
+            max_delay=douban_config.get('max_delay', 3.0))
 
         # 初始化 Z-Library 服务
         zlib_config = self.config_manager.get_zlibrary_config()
@@ -82,7 +91,9 @@ class DoubanZLibraryCalibre:
             password=zlib_config.get('password'),
             format_priority=zlib_config.get('format_priority'),
             proxy_list=zlib_config.get('proxy_list'),
-            download_dir=zlib_config.get('download_dir', 'data/downloads'))
+            download_dir=zlib_config.get('download_dir', 'data/downloads'),
+            min_delay=zlib_config.get('min_delay', 1.0),
+            max_delay=zlib_config.get('max_delay', 3.0))
 
         # 初始化 Calibre 服务
         calibre_config = self.config_manager.get_calibre_config()
@@ -189,18 +200,22 @@ class DoubanZLibraryCalibre:
         if existing_book:
             self.logger.info(f"书籍已存在于 Calibre: {book_title}")
             if book_id:
-                self.db.update_book_status(book_id, BookStatus.MATCHED)
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.MATCHED, 
+                    change_reason="Found existing book in Calibre"
+                )
             return True, None, None
 
         # 从 Z-Library 下载
         try:
             # 更新状态为搜索中
             if book_id:
-                with self.db.session_scope() as session:
-                    book_obj = session.query(DoubanBook).filter(
-                        DoubanBook.id == book_id).first()
-                    if book_obj:
-                        book_obj.status = BookStatus.SEARCHING
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.SEARCHING,
+                    change_reason="Starting Z-Library search"
+                )
+
+            self.logger.info(f"Z-lib搜索 {book_title} {book_author} {book_isbn}")
 
             # 搜索并下载书籍
             download_result = self.zlibrary_service.search_and_download(
@@ -210,39 +225,36 @@ class DoubanZLibraryCalibre:
                 error_msg = f"从 Z-Library 下载失败: {download_result.get('error') if download_result else '未找到资源'}"
                 self.logger.error(error_msg)
                 if book_id:
-                    with self.db.session_scope() as session:
-                        book_obj = session.query(DoubanBook).filter(
-                            DoubanBook.id == book_id).first()
-                        if book_obj:
-                            book_obj.status = BookStatus.SEARCH_NOT_FOUND
+                    self.db.update_book_status_with_history(
+                        book_id, BookStatus.SEARCH_NOT_FOUND,
+                        change_reason="Z-Library search failed",
+                        error_message=error_msg
+                    )
                 return False, None, error_msg
 
             # 更新状态为下载中
             if book_id:
-                with self.db.session_scope() as session:
-                    book_obj = session.query(DoubanBook).filter(
-                        DoubanBook.id == book_id).first()
-                    if book_obj:
-                        book_obj.status = BookStatus.DOWNLOADING
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.DOWNLOADING,
+                    change_reason="Starting file download from Z-Library"
+                )
 
             file_path = download_result['file_path']
             self.logger.info(f"从 Z-Library 下载成功: {file_path}")
 
             # 更新状态为已下载
             if book_id:
-                with self.db.session_scope() as session:
-                    book_obj = session.query(DoubanBook).filter(
-                        DoubanBook.id == book_id).first()
-                    if book_obj:
-                        book_obj.status = BookStatus.DOWNLOADED
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.DOWNLOADED,
+                    change_reason="Successfully downloaded from Z-Library"
+                )
 
             # 更新状态为上传中
             if book_id:
-                with self.db.session_scope() as session:
-                    book_obj = session.query(DoubanBook).filter(
-                        DoubanBook.id == book_id).first()
-                    if book_obj:
-                        book_obj.status = BookStatus.UPLOADING
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.UPLOADING,
+                    change_reason="Starting upload to Calibre"
+                )
 
             # 上传到 Calibre
             book_id_calibre = self.calibre_service.upload_book(
@@ -257,13 +269,18 @@ class DoubanZLibraryCalibre:
                 self.logger.info(
                     f"上传到 Calibre 成功: {book_title}, ID: {book_id_calibre}")
                 if book_id:
-                    with self.db.session_scope() as session:
-                        book_obj = session.query(DoubanBook).filter(
-                            DoubanBook.id == book_id).first()
-                        if book_obj:
-                            book_obj.status = BookStatus.UPLOADED
+                    self.db.update_book_status_with_history(
+                        book_id, BookStatus.UPLOADED,
+                        change_reason="Successfully uploaded to Calibre"
+                    )
             else:
                 self.logger.warning(f"上传到 Calibre 失败: {book_title}")
+                if book_id:
+                    self.db.update_book_status_with_history(
+                        book_id, BookStatus.DOWNLOADED,  # 保持已下载状态
+                        change_reason="Failed to upload to Calibre",
+                        error_message="Calibre upload failed"
+                    )
 
             return True, file_path, None
 
@@ -272,11 +289,11 @@ class DoubanZLibraryCalibre:
             self.logger.error(error_msg)
             traceback.print_exc()
             if book_id:
-                with self.db.session_scope() as session:
-                    book_obj = session.query(DoubanBook).filter(
-                        DoubanBook.id == book_id).first()
-                    if book_obj:
-                        book_obj.status = BookStatus.SEARCH_NOT_FOUND
+                self.db.update_book_status_with_history(
+                    book_id, BookStatus.SEARCH_NOT_FOUND,
+                    change_reason="Exception during book processing",
+                    error_message=error_msg
+                )
             return False, None, error_msg
 
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
@@ -305,9 +322,10 @@ class DoubanZLibraryCalibre:
         existing_books_count = 0
         with self.db.session_scope() as session:
             for book in books:
-                # 通过豆瓣URL、ISBN或标题和作者组合查找已存在的书籍
+                # 通过豆瓣URL或豆瓣ID查找已存在的书籍
                 existing_book = session.query(DoubanBook).filter(
-                    (DoubanBook.douban_url == book['douban_url'])).first()
+                    (DoubanBook.douban_url == book['douban_url'])
+                    | (DoubanBook.douban_id == book['douban_id'])).first()
 
                 if not existing_book:
                     new_book = DoubanBook(
@@ -343,7 +361,17 @@ class DoubanZLibraryCalibre:
                     book.original_title = book_detail.get('original_title')
                     book.subtitle = book_detail.get('subtitle')
                     book.summary = book_detail.get('summary')
+                    # 直接更新状态，这里在同一个session中
                     book.status = BookStatus.WITH_DETAIL
+                    # 创建历史记录
+                    from db.models import BookStatusHistory
+                    history = BookStatusHistory(
+                        book_id=book.id,
+                        old_status=BookStatus.NEW,
+                        new_status=BookStatus.WITH_DETAIL,
+                        change_reason="Retrieved detailed information from Douban"
+                    )
+                    session.add(history)
                     self.logger.info(f"获取书籍详细信息成功: {book.title}")
 
             # 获取状态为 WITH_DETAIL 的书籍的ID列表
@@ -384,7 +412,7 @@ class DoubanZLibraryCalibre:
         for book_id in book_ids_to_search:
             with self.db.session_scope() as session:
                 # 重新获取书籍对象
-                book = session.query(DoubanBook).get(book_id)
+                book = session.get(DoubanBook, book_id)
                 if not book:
                     continue
 
@@ -406,22 +434,31 @@ class DoubanZLibraryCalibre:
                     })
                     continue
 
-                # 处理书籍
-                success, file_path, error_msg = self.process_book(
-                    {
-                        'title': book_title,
-                        'author': book_author,
-                        'isbn': book_isbn,
-                        'douban_id': book.douban_id,
-                        'douban_url': book.douban_url,
-                        'cover_url': book.cover_url,
-                        'publisher': book.publisher,
-                        'publish_date': book.publish_date
-                    }, book.id)
+                # 获取书籍信息用于处理
+                book_data = {
+                    'title': book_title,
+                    'author': book_author,
+                    'isbn': book_isbn,
+                    'douban_id': book.douban_id,
+                    'douban_url': book.douban_url,
+                    'cover_url': book.cover_url,
+                    'publisher': book.publisher,
+                    'publish_date': book.publish_date
+                }
+
+            # 在session外部处理书籍
+            success, file_path, error_msg = self.process_book(book_data, book_id)
+
+            # 重新开启session来处理结果
+            with self.db.session_scope() as session:
+                # 重新获取书籍对象
+                book = session.get(DoubanBook, book_id)
+                if not book:
+                    continue
 
                 # 更新书籍状态
                 if success:
-                    # 状态已在 process_book 中更新为 DOWNLOADED 或 UPLOADED
+                    # 状态已在 process_book 中更新，这里只更新其他字段
                     book.last_check = datetime.now()
 
                     if file_path:
@@ -454,9 +491,10 @@ class DoubanZLibraryCalibre:
                             },
                             download_status=True)
                 else:
-                    book.status = BookStatus.SEARCH_NOT_FOUND
+                    # 状态已在 process_book 中更新为失败状态
                     book.last_check = datetime.now()
-                    book.error_message = error_msg
+                    if error_msg:
+                        book.error_message = error_msg
 
                     failed_count += 1
                     details.append({
