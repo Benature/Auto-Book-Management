@@ -24,7 +24,7 @@ from utils.logger import setup_logger, get_logger
 from db.database import Database
 from db.models import BookStatus, DoubanBook, DownloadRecord, SyncTask
 from datetime import datetime
-from scrapers.douban_scraper import DoubanScraper
+from scrapers.douban_scraper import DoubanScraper, DoubanAccessDeniedException
 from services.zlibrary_service import ZLibraryService
 from services.calibre_service import CalibreService
 from services.lark_service import LarkService
@@ -48,13 +48,13 @@ class DoubanZLibraryCalibre:
         import logging
         from utils.logger import generate_log_path
         log_config = self.config_manager.get_logging_config()
-        
+
         # 使用新的日志路径格式，除非配置文件中明确指定了路径
         if 'file' in log_config and log_config['file'] != 'logs/app.log':
             log_file = log_config['file']  # 使用用户指定的路径
         else:
             log_file = generate_log_path()  # 使用新的格式
-            
+
         log_level = log_config.get('level', 'INFO')
         log_level_value = getattr(logging, log_level.upper(), logging.INFO)
         setup_logger(log_level_value, log_file)
@@ -194,67 +194,97 @@ class DoubanZLibraryCalibre:
         self.logger.info(f"处理书籍: {book_title} - {book_author}")
 
         # 检查 Calibre 中是否已存在
-        existing_book = self.calibre_service.find_best_match(
-            title=book_title, author=book_author, isbn=book_isbn)
+        try:
+            existing_book = self.calibre_service.find_best_match(
+                title=book_title, author=book_author, isbn=book_isbn)
 
-        if existing_book:
-            self.logger.info(f"书籍已存在于 Calibre: {book_title}")
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id, BookStatus.MATCHED, 
-                    change_reason="Found existing book in Calibre"
-                )
-            return True, None, None
+            if existing_book:
+                self.logger.info(f"书籍已存在于 Calibre: {book_title}")
+                if book_id:
+                    self.db.update_book_status_with_history(
+                        book_id,
+                        BookStatus.MATCHED,
+                        change_reason="Found existing book in Calibre")
+                return True, None, None
+        except Exception as e:
+            self.logger.warning(f"Calibre 搜索失败，将继续使用 Z-Library 搜索: {str(e)}")
+            # 继续执行 Z-Library 搜索，不返回错误
 
         # 从 Z-Library 下载
         try:
             # 更新状态为搜索中
             if book_id:
                 self.db.update_book_status_with_history(
-                    book_id, BookStatus.SEARCHING,
-                    change_reason="Starting Z-Library search"
-                )
+                    book_id,
+                    BookStatus.SEARCHING,
+                    change_reason="Starting Z-Library search")
 
             self.logger.info(f"Z-lib搜索 {book_title} {book_author} {book_isbn}")
 
-            # 搜索并下载书籍
-            download_result = self.zlibrary_service.search_and_download(
-                title=book_title, author=book_author, isbn=book_isbn)
+            # 获取出版社信息并修正数据错误
+            book_publisher = book.get('publisher', '')
+            book_publish_date = book.get('publish_date', '')
 
-            if not download_result or not download_result.get('success'):
-                error_msg = f"从 Z-Library 下载失败: {download_result.get('error') if download_result else '未找到资源'}"
+            # 修正数据：如果 publisher 看起来像日期，而 publish_date 看起来像价格或出版社，则交换
+            if book_publisher and book_publish_date:
+                import re
+                # 检查 publisher 是否像日期格式 (YYYY-MM-DD 或 YYYY-MM 或 YYYY)
+                date_pattern = r'^\d{4}(-\d{1,2})?(-\d{1,2})?$'
+                # 检查 publish_date 是否包含货币符号或"元"等价格标识
+                price_pattern = r'(EUR|USD|CNY|￥|元|\.00)'
+
+                if (re.match(date_pattern, book_publisher.strip())
+                        or re.search(price_pattern, book_publish_date)):
+                    # 看起来数据有问题，尝试从原始字符串重新解析
+                    self.logger.warning(
+                        f"检测到数据错误 - 出版社字段为日期格式: '{book_publisher}', 出版日期字段为: '{book_publish_date}'"
+                    )
+                    # 由于历史数据已经错乱，这里直接清空出版社信息，避免搜索时使用错误信息
+                    book_publisher = ''
+                    self.logger.info(f"已清空出版社信息以避免搜索错误")
+
+            # 搜索并下载书籍
+            book_douban_id = book.get('douban_id', '')
+            file_path = self.zlibrary_service.search_and_download(
+                title=book_title,
+                author=book_author,
+                isbn=book_isbn,
+                publisher=book_publisher,
+                douban_id=book_douban_id)
+
+            if not file_path:
+                error_msg = f"从 Z-Library 下载失败: 未找到资源或下载失败"
                 self.logger.error(error_msg)
                 if book_id:
                     self.db.update_book_status_with_history(
-                        book_id, BookStatus.SEARCH_NOT_FOUND,
-                        change_reason="Z-Library search failed",
-                        error_message=error_msg
-                    )
+                        book_id,
+                        BookStatus.SEARCH_NOT_FOUND,
+                        change_reason="Z-Library search or download failed",
+                        error_message=error_msg)
                 return False, None, error_msg
 
             # 更新状态为下载中
             if book_id:
                 self.db.update_book_status_with_history(
-                    book_id, BookStatus.DOWNLOADING,
-                    change_reason="Starting file download from Z-Library"
-                )
+                    book_id,
+                    BookStatus.DOWNLOADING,
+                    change_reason="Starting file download from Z-Library")
 
-            file_path = download_result['file_path']
             self.logger.info(f"从 Z-Library 下载成功: {file_path}")
 
             # 更新状态为已下载
             if book_id:
                 self.db.update_book_status_with_history(
-                    book_id, BookStatus.DOWNLOADED,
-                    change_reason="Successfully downloaded from Z-Library"
-                )
+                    book_id,
+                    BookStatus.DOWNLOADED,
+                    change_reason="Successfully downloaded from Z-Library")
 
             # 更新状态为上传中
             if book_id:
                 self.db.update_book_status_with_history(
-                    book_id, BookStatus.UPLOADING,
-                    change_reason="Starting upload to Calibre"
-                )
+                    book_id,
+                    BookStatus.UPLOADING,
+                    change_reason="Starting upload to Calibre")
 
             # 上传到 Calibre
             book_id_calibre = self.calibre_service.upload_book(
@@ -270,17 +300,17 @@ class DoubanZLibraryCalibre:
                     f"上传到 Calibre 成功: {book_title}, ID: {book_id_calibre}")
                 if book_id:
                     self.db.update_book_status_with_history(
-                        book_id, BookStatus.UPLOADED,
-                        change_reason="Successfully uploaded to Calibre"
-                    )
+                        book_id,
+                        BookStatus.UPLOADED,
+                        change_reason="Successfully uploaded to Calibre")
             else:
                 self.logger.warning(f"上传到 Calibre 失败: {book_title}")
                 if book_id:
                     self.db.update_book_status_with_history(
-                        book_id, BookStatus.DOWNLOADED,  # 保持已下载状态
+                        book_id,
+                        BookStatus.DOWNLOADED,  # 保持已下载状态
                         change_reason="Failed to upload to Calibre",
-                        error_message="Calibre upload failed"
-                    )
+                        error_message="Calibre upload failed")
 
             return True, file_path, None
 
@@ -290,10 +320,10 @@ class DoubanZLibraryCalibre:
             traceback.print_exc()
             if book_id:
                 self.db.update_book_status_with_history(
-                    book_id, BookStatus.SEARCH_NOT_FOUND,
+                    book_id,
+                    BookStatus.SEARCH_NOT_FOUND,
                     change_reason="Exception during book processing",
-                    error_message=error_msg
-                )
+                    error_message=error_msg)
             return False, None, error_msg
 
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
@@ -308,8 +338,23 @@ class DoubanZLibraryCalibre:
         """
         self.logger.info("开始同步豆瓣想读书单")
 
+        # DEV:
+        # books = []
         # 获取豆瓣想读书单
-        books = self.douban_scraper.get_wish_list()
+        try:
+            books = self.douban_scraper.get_wish_list()
+        except DoubanAccessDeniedException as e:
+            self.logger.error(f"豆瓣访问被拒绝: {e.message}")
+            # 发送飞书通知
+            if self.lark_service:
+                try:
+                    self.lark_service.send_403_error_notification(e.message, "豆瓣想读书单页面")
+                except Exception as notify_error:
+                    self.logger.error(f"发送飞书通知失败: {notify_error}")
+            # 程序终止
+            self.logger.critical("由于豆瓣403错误，程序终止运行")
+            sys.exit(1)
+        
         if not books:
             self.logger.warning("未获取到豆瓣想读书单")
             return
@@ -354,25 +399,38 @@ class DoubanZLibraryCalibre:
                 DoubanBook.status == BookStatus.NEW).all()
             self.logger.info(f"发现 {len(new_books)} 本新书，开始获取详细信息")
             for book in new_books:
-                book_detail = self.douban_scraper.get_book_detail(
-                    book.douban_url)
-                if book_detail:
-                    book.isbn = book_detail.get('isbn', book.isbn)
-                    book.original_title = book_detail.get('original_title')
-                    book.subtitle = book_detail.get('subtitle')
-                    book.summary = book_detail.get('summary')
-                    # 直接更新状态，这里在同一个session中
-                    book.status = BookStatus.WITH_DETAIL
-                    # 创建历史记录
-                    from db.models import BookStatusHistory
-                    history = BookStatusHistory(
-                        book_id=book.id,
-                        old_status=BookStatus.NEW,
-                        new_status=BookStatus.WITH_DETAIL,
-                        change_reason="Retrieved detailed information from Douban"
-                    )
-                    session.add(history)
-                    self.logger.info(f"获取书籍详细信息成功: {book.title}")
+                try:
+                    book_detail = self.douban_scraper.get_book_detail(
+                        book.douban_url)
+                    if book_detail:
+                        book.isbn = book_detail.get('isbn', book.isbn)
+                        book.original_title = book_detail.get('original_title')
+                        book.subtitle = book_detail.get('subtitle')
+                        book.summary = book_detail.get('summary')
+                        # 直接更新状态，这里在同一个session中
+                        book.status = BookStatus.WITH_DETAIL
+                        # 创建历史记录
+                        from db.models import BookStatusHistory
+                        history = BookStatusHistory(
+                            book_id=book.id,
+                            old_status=BookStatus.NEW,
+                            new_status=BookStatus.WITH_DETAIL,
+                            change_reason=
+                            "Retrieved detailed information from Douban")
+                        session.add(history)
+                        self.logger.info(f"获取书籍详细信息成功: {book.title}")
+                except DoubanAccessDeniedException as e:
+                    self.logger.error(f"获取书籍详细信息时豆瓣访问被拒绝: {e.message}")
+                    # 发送飞书通知
+                    if self.lark_service:
+                        try:
+                            self.lark_service.send_403_error_notification(e.message, book.douban_url)
+                        except Exception as notify_error:
+                            self.logger.error(f"发送飞书通知失败: {notify_error}")
+                    # 程序终止
+                    self.logger.critical("由于豆瓣403错误，程序终止运行")
+                    sys.exit(1)
+                break  # DEV:
 
             # 获取状态为 WITH_DETAIL 的书籍的ID列表
             book_ids_to_search = [
@@ -380,6 +438,7 @@ class DoubanZLibraryCalibre:
                     DoubanBook.status == BookStatus.WITH_DETAIL).all()
             ]
 
+        # DEV:
         if not books:
             self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
             self.db.update_sync_task(
@@ -447,7 +506,8 @@ class DoubanZLibraryCalibre:
                 }
 
             # 在session外部处理书籍
-            success, file_path, error_msg = self.process_book(book_data, book_id)
+            success, file_path, error_msg = self.process_book(
+                book_data, book_id)
 
             # 重新开启session来处理结果
             with self.db.session_scope() as session:

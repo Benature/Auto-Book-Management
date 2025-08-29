@@ -120,16 +120,18 @@ class ZLibraryBook(Base):
     zlibrary_id = Column(String(50), index=True)  # Z-Library中的书籍ID
     douban_id = Column(String(20), ForeignKey('douban_books.douban_id'), nullable=False, index=True)  # 关联豆瓣书籍
     title = Column(String(255), nullable=False, index=True)
-    author = Column(String(255), index=True)
+    authors = Column(String(500), index=True)  # 作者列表，用;;分隔
     publisher = Column(String(255))
     year = Column(String(10))
     language = Column(String(50))
     isbn = Column(String(20))
-    file_format = Column(String(10))  # epub, mobi, pdf 等
-    file_size = Column(Integer)  # 文件大小（字节）
-    download_url = Column(String(500))  # Z-Library下载链接
-    mirror_url = Column(String(500))   # 镜像链接
-    quality_score = Column(Float)  # 质量评分
+    extension = Column(String(10))  # epub, mobi, pdf 等
+    size = Column(String(50))  # 文件大小（如 "15.11 MB"）
+    url = Column(String(500))  # Z-Library书籍页面链接
+    cover = Column(String(500))  # 封面图片链接
+    rating = Column(String(10))  # 评分
+    quality = Column(String(10))  # 质量评级
+    raw_json = Column(Text)  # 原始JSON数据
     download_count = Column(Integer, default=0)  # 下载次数统计
     is_available = Column(Boolean, default=True)  # 是否可用
     last_checked = Column(DateTime)  # 最后检查时间
@@ -140,7 +142,7 @@ class ZLibraryBook(Base):
     douban_book = relationship("DoubanBook", back_populates="zlibrary_books")
 
     def __repr__(self):
-        return f"<ZLibraryBook(id={self.id}, zlibrary_id='{self.zlibrary_id}', title='{self.title}', format='{self.file_format}')>"
+        return f"<ZLibraryBook(id={self.id}, zlibrary_id='{self.zlibrary_id}', title='{self.title}', format='{self.extension}')>"
 
 
 class BookStatusHistory(Base):

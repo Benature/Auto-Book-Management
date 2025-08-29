@@ -17,6 +17,13 @@ from db.models import BookStatus
 import http.client
 from rich.progress import Progress
 
+
+class DoubanAccessDeniedException(Exception):
+    """豆瓣访问被拒绝异常（403错误）"""
+    def __init__(self, message: str = "豆瓣返回403错误，访问被拒绝"):
+        self.message = message
+        super().__init__(self.message)
+
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -191,6 +198,12 @@ class DoubanScraper:
                     
                     self.request_count += 1
                     response = self.session.get(url, timeout=15)
+                    
+                    # 检查是否返回403错误
+                    if response.status_code == 403:
+                        self.logger.error(f"豆瓣返回403错误，访问被拒绝，URL: {url}")
+                        raise DoubanAccessDeniedException(f"豆瓣访问被拒绝，状态码: 403，URL: {url}")
+                    
                     response.raise_for_status()
                     text = response.text
                     
@@ -329,6 +342,12 @@ class DoubanScraper:
             
             self.request_count += 1
             response = self.session.get(book_douban_url, timeout=10)
+            
+            # 检查是否返回403错误
+            if response.status_code == 403:
+                self.logger.error(f"豆瓣返回403错误，访问被拒绝，URL: {book_douban_url}")
+                raise DoubanAccessDeniedException(f"豆瓣访问被拒绝，状态码: 403，URL: {book_douban_url}")
+            
             response.raise_for_status()
             
             # 请求成功，重置错误计数

@@ -175,6 +175,57 @@ class LarkService:
         title = "📚 豆瓣书籍下载通知"
         return self.send_card_message(title, elements)
 
+    def send_403_error_notification(self, error_message: str, url: str) -> bool:
+        """
+        发送豆瓣403错误通知
+        
+        Args:
+            error_message: 错误信息
+            url: 出错的URL
+            
+        Returns:
+            bool: 发送是否成功
+        """
+        # 构建卡片元素
+        elements = [{
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "⚠️ **豆瓣访问被拒绝 (403错误)**"
+            }
+        }, {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**错误信息**: {error_message}"
+            }
+        }, {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": f"**出错URL**: {url}"
+            }
+        }, {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": "**处理方式**: 程序已停止运行，请检查Cookie或更换代理"
+            }
+        }]
+
+        # 添加时间信息
+        elements.append({
+            "tag": "note",
+            "elements": [{
+                "tag": "plain_text",
+                "content": f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            }]
+        })
+
+        # 发送卡片消息
+        title = "🚫 豆瓣同步工具 - 访问被拒绝"
+        return self.send_card_message(title, elements)
+
     def send_sync_summary(
             self,
             total: int,

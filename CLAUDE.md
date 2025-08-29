@@ -101,3 +101,5 @@ The `config.yaml` requires:
 - `pyyaml`: Configuration management
 - `loguru`: Structured logging
 - `pytest`: Testing framework with coverage and mocking
+
+少用try
