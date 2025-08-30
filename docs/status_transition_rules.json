@@ -1,0 +1,155 @@
+{
+  "title": "豆瓣Z-Library同步工具状态转换规则",
+  "version": "2.0",
+  "created": "2025-08-30",
+  "description": "定义所有有效的状态转换路径和规则",
+  
+  "status_definitions": {
+    "data_collection": {
+      "new": "豆瓣新发现的书籍",
+      "detail_fetching": "正在获取豆瓣详细信息", 
+      "detail_complete": "详细信息获取完成"
+    },
+    "search": {
+      "search_queued": "排队等待Z-Library搜索",
+      "search_active": "正在搜索Z-Library", 
+      "search_complete": "搜索完成，找到匹配结果",
+      "search_no_results": "搜索完成，无匹配结果"
+    },
+    "download": {
+      "download_queued": "排队等待下载",
+      "download_active": "正在从Z-Library下载",
+      "download_complete": "下载完成", 
+      "download_failed": "下载失败"
+    },
+    "upload": {
+      "upload_queued": "排队等待上传到Calibre",
+      "upload_active": "正在上传到Calibre",
+      "upload_complete": "上传完成",
+      "upload_failed": "上传失败"
+    },
+    "final": {
+      "completed": "整个流程成功完成",
+      "skipped_exists": "在Calibre中已存在，跳过处理", 
+      "failed_permanent": "永久失败，不再重试"
+    }
+  },
+
+  "transition_rules": {
+    "new": ["detail_fetching", "skipped_exists", "failed_permanent"],
+    "detail_fetching": ["detail_complete", "failed_permanent", "new"],
+    "detail_complete": ["search_queued", "skipped_exists", "failed_permanent"],
+    
+    "search_queued": ["search_active", "failed_permanent"],
+    "search_active": ["search_complete", "search_no_results", "failed_permanent", "search_queued"],
+    "search_complete": ["download_queued", "failed_permanent"],
+    "search_no_results": ["search_queued", "failed_permanent"],
+    
+    "download_queued": ["download_active", "failed_permanent"],
+    "download_active": ["download_complete", "download_failed", "download_queued"],
+    "download_complete": ["upload_queued", "failed_permanent"],
+    "download_failed": ["download_queued", "failed_permanent"],
+    
+    "upload_queued": ["upload_active", "failed_permanent"],
+    "upload_active": ["upload_complete", "upload_failed", "upload_queued"],
+    "upload_complete": ["completed"],
+    "upload_failed": ["upload_queued", "failed_permanent"],
+    
+    "completed": [],
+    "skipped_exists": [],
+    "failed_permanent": []
+  },
+
+  "pipeline_stages": {
+    "data_collection": {
+      "input_status": ["new"],
+      "active_status": "detail_fetching",
+      "success_status": "detail_complete",
+      "failure_status": "failed_permanent",
+      "retry_status": "new"
+    },
+    "search": {
+      "input_status": ["search_queued"],
+      "active_status": "search_active", 
+      "success_status": "search_complete",
+      "failure_status": "search_no_results",
+      "retry_status": "search_queued"
+    },
+    "download": {
+      "input_status": ["download_queued"],
+      "active_status": "download_active",
+      "success_status": "download_complete", 
+      "failure_status": "download_failed",
+      "retry_status": "download_queued"
+    },
+    "upload": {
+      "input_status": ["upload_queued"],
+      "active_status": "upload_active",
+      "success_status": "upload_complete",
+      "failure_status": "upload_failed", 
+      "retry_status": "upload_queued"
+    }
+  },
+
+  "error_handling": {
+    "retry_policy": {
+      "max_retries": 3,
+      "backoff_strategy": "exponential",
+      "base_delay_seconds": 30,
+      "max_delay_seconds": 300
+    },
+    "error_types": {
+      "network_error": {
+        "retryable": true,
+        "description": "网络连接超时或失败"
+      },
+      "auth_error": {
+        "retryable": false, 
+        "description": "认证失败，直接标记永久失败"
+      },
+      "resource_not_found": {
+        "retryable": false,
+        "description": "资源不存在，搜索阶段标记无结果"
+      },
+      "processing_error": {
+        "retryable": true,
+        "description": "处理过程中的一般错误"
+      }
+    }
+  },
+
+  "special_flows": {
+    "douban_403_handling": {
+      "description": "豆瓣403错误时的特殊处理流程",
+      "steps": [
+        "检测豆瓣403错误",
+        "跳过豆瓣书单同步", 
+        "获取数据库中现有书籍",
+        "为现有书籍调度Pipeline任务",
+        "data_collection阶段跳过豆瓣详情获取", 
+        "准备基本搜索信息",
+        "继续正常的search阶段流程"
+      ],
+      "benefits": [
+        "系统在豆瓣受限时仍能正常工作",
+        "利用现有数据进行Z-Library搜索",
+        "保证服务的连续性和可用性"
+      ]
+    }
+  },
+
+  "monitoring": {
+    "notifications": {
+      "status_change": "每次状态转换发送飞书通知",
+      "error_occurred": "错误发生时发送错误通知", 
+      "douban_403": "豆瓣403错误特殊通知",
+      "task_completion": "任务完成时发送总结通知"
+    },
+    "metrics": {
+      "processing_time": "记录每个阶段的处理耗时",
+      "retry_count": "记录重试次数和原因",
+      "success_rate": "各阶段成功率统计",
+      "error_distribution": "错误类型分布统计"
+    }
+  }
+}

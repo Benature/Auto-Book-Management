@@ -396,7 +396,7 @@ class DoubanScraper:
             'original_title': original_title,
             'subtitle': subtitle,
             'description': description,
-            'status': BookStatus.WITH_DETAIL,
+            'status': BookStatus.DETAIL_COMPLETE,
         }
 
     def run(self) -> List[Dict[str, Any]]:

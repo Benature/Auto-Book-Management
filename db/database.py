@@ -21,17 +21,28 @@ from pathlib import Path
 class Database:
     """数据库操作类"""
 
-    def __init__(self, db_url: str):
+    def __init__(self, config_manager):
         """
         初始化数据库
         
         Args:
-            db_url: 数据库连接 URL
+            config_manager: 配置管理器实例
         """
-        self.db_url = db_url
+        # 根据配置生成数据库URL
+        db_config = config_manager.get_database_config()
+        if db_config.get('type') == 'sqlite':
+            self.db_url = f"sqlite:///{db_config.get('path', 'data/douban_books.db')}"
+        elif db_config.get('type') == 'postgresql':
+            self.db_url = f"postgresql://{db_config.get('username')}:{db_config.get('password')}@{db_config.get('host')}:{db_config.get('port')}/{db_config.get('database')}"
+        else:
+            # 默认使用SQLite
+            self.db_url = "sqlite:///data/douban_books.db"
+        
         self.logger = get_logger("database")
-        self.engine = create_engine(db_url)
+        self.engine = create_engine(self.db_url)
         self.Session = scoped_session(sessionmaker(bind=self.engine))
+        # 为新架构提供session_factory
+        self.session_factory = sessionmaker(bind=self.engine)
 
     def _initialize_database(self):
         """

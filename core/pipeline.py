@@ -1,0 +1,439 @@
+# -*- coding: utf-8 -*-
+"""
+Pipeline架构核心
+
+实现分阶段的书籍处理流程。
+"""
+
+import abc
+from typing import Dict, List, Optional, Any, Type
+from datetime import datetime
+from sqlalchemy.orm import Session
+from concurrent.futures import ThreadPoolExecutor, Future
+import threading
+import time
+
+from db.models import BookStatus, DoubanBook, ProcessingTask
+from core.state_manager import BookStateManager
+from utils.logger import get_logger
+
+
+class ProcessingError(Exception):
+    """处理错误基类"""
+    
+    def __init__(self, message: str, error_type: str = "system", retryable: bool = True):
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+
+
+class NetworkError(ProcessingError):
+    """网络错误"""
+    
+    def __init__(self, message: str):
+        super().__init__(message, "network", retryable=True)
+
+
+class AuthError(ProcessingError):
+    """认证错误"""
+    
+    def __init__(self, message: str):
+        super().__init__(message, "auth", retryable=False)
+
+
+class ResourceNotFoundError(ProcessingError):
+    """资源未找到错误"""
+    
+    def __init__(self, message: str):
+        super().__init__(message, "resource_not_found", retryable=False)
+
+
+class BaseStage(abc.ABC):
+    """处理阶段基类"""
+    
+    def __init__(self, name: str, state_manager: BookStateManager):
+        """
+        初始化处理阶段
+        
+        Args:
+            name: 阶段名称
+            state_manager: 状态管理器
+        """
+        self.name = name
+        self.state_manager = state_manager
+        self.logger = get_logger(f"pipeline.{name}")
+        self._stop_event = threading.Event()
+        
+    @abc.abstractmethod
+    def can_process(self, book: DoubanBook) -> bool:
+        """
+        检查是否可以处理该书籍
+        
+        Args:
+            book: 书籍对象
+            
+        Returns:
+            bool: 是否可以处理
+        """
+        pass
+    
+    @abc.abstractmethod
+    def process(self, book: DoubanBook) -> bool:
+        """
+        处理书籍
+        
+        Args:
+            book: 书籍对象
+            
+        Returns:
+            bool: 处理是否成功
+        """
+        pass
+    
+    @abc.abstractmethod
+    def get_next_status(self, success: bool) -> BookStatus:
+        """
+        获取处理完成后的下一状态
+        
+        Args:
+            success: 处理是否成功
+            
+        Returns:
+            BookStatus: 下一状态
+        """
+        pass
+    
+    def execute(self, book: DoubanBook) -> bool:
+        """
+        执行处理逻辑，包含状态管理
+        
+        Args:
+            book: 书籍对象
+            
+        Returns:
+            bool: 处理是否成功
+        """
+        start_time = datetime.now()
+        
+        try:
+            self.logger.info(f"开始处理书籍: {book.title} (ID: {book.id})")
+            
+            # 检查是否可以处理
+            if not self.can_process(book):
+                self.logger.warning(f"无法处理书籍: {book.title}, 状态: {book.status}")
+                return False
+            
+            # 设置为active状态
+            active_status = self._get_active_status()
+            if active_status:
+                self.state_manager.transition_status(
+                    book.id,
+                    active_status,
+                    f"开始{self.name}阶段处理"
+                )
+            
+            # 执行实际处理
+            success = self.process(book)
+            
+            # 计算处理时间
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            # 更新状态
+            next_status = self.get_next_status(success)
+            change_reason = f"{self.name}阶段{'成功' if success else '失败'}"
+            
+            self.state_manager.transition_status(
+                book.id,
+                next_status,
+                change_reason,
+                processing_time=processing_time
+            )
+            
+            self.logger.info(
+                f"处理完成: {book.title}, 成功: {success}, "
+                f"耗时: {processing_time:.2f}秒, 下一状态: {next_status.value}"
+            )
+            
+            return success
+            
+        except ProcessingError as e:
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            # 根据错误类型决定下一状态
+            if e.retryable:
+                next_status = self._get_retry_status()
+            else:
+                next_status = BookStatus.FAILED_PERMANENT
+            
+            self.state_manager.transition_status(
+                book.id,
+                next_status,
+                f"{self.name}阶段出错: {e.error_type}",
+                error_message=str(e),
+                processing_time=processing_time
+            )
+            
+            self.logger.error(f"处理出错: {book.title}, 错误: {str(e)}")
+            return False
+            
+        except Exception as e:
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            self.state_manager.transition_status(
+                book.id,
+                BookStatus.FAILED_PERMANENT,
+                f"{self.name}阶段异常",
+                error_message=str(e),
+                processing_time=processing_time
+            )
+            
+            self.logger.error(f"处理异常: {book.title}, 异常: {str(e)}")
+            return False
+    
+    def _get_active_status(self) -> Optional[BookStatus]:
+        """获取对应的active状态"""
+        active_mapping = {
+            'data_collection': BookStatus.DETAIL_FETCHING,
+            'search': BookStatus.SEARCH_ACTIVE,
+            'download': BookStatus.DOWNLOAD_ACTIVE,
+            'upload': BookStatus.UPLOAD_ACTIVE
+        }
+        return active_mapping.get(self.name)
+    
+    def _get_retry_status(self) -> BookStatus:
+        """获取重试时的状态"""
+        retry_mapping = {
+            'data_collection': BookStatus.NEW,
+            'search': BookStatus.SEARCH_QUEUED,
+            'download': BookStatus.DOWNLOAD_QUEUED,
+            'upload': BookStatus.UPLOAD_QUEUED
+        }
+        return retry_mapping.get(self.name, BookStatus.FAILED_PERMANENT)
+    
+    def stop(self):
+        """停止处理"""
+        self._stop_event.set()
+        
+    def is_stopped(self) -> bool:
+        """检查是否已停止"""
+        return self._stop_event.is_set()
+
+
+class PipelineManager:
+    """Pipeline管理器"""
+    
+    def __init__(self, state_manager: BookStateManager, max_workers: int = 4):
+        """
+        初始化Pipeline管理器
+        
+        Args:
+            state_manager: 状态管理器实例
+            max_workers: 最大工作线程数
+        """
+        self.state_manager = state_manager
+        self.max_workers = max_workers
+        self.logger = get_logger("pipeline_manager")
+        
+        # 注册的处理阶段
+        self.stages: Dict[str, BaseStage] = {}
+        
+        # 线程池
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._running = False
+        self._stop_event = threading.Event()
+        
+        # 活跃任务追踪
+        self._active_tasks: Dict[int, Future] = {}
+        self._task_lock = threading.Lock()
+    
+    def register_stage(self, stage: BaseStage):
+        """
+        注册处理阶段
+        
+        Args:
+            stage: 处理阶段实例
+        """
+        self.stages[stage.name] = stage
+        self.logger.info(f"注册处理阶段: {stage.name}")
+    
+    def start(self):
+        """启动Pipeline"""
+        if self._running:
+            self.logger.warning("Pipeline已经在运行中")
+            return
+        
+        self._running = True
+        self._stop_event.clear()
+        self.logger.info("Pipeline已启动")
+        
+        # 启动主处理循环
+        self._main_loop()
+    
+    def stop(self):
+        """停止Pipeline"""
+        if not self._running:
+            return
+        
+        self.logger.info("正在停止Pipeline...")
+        self._running = False
+        self._stop_event.set()
+        
+        # 停止所有阶段
+        for stage in self.stages.values():
+            stage.stop()
+        
+        # 等待所有活跃任务完成
+        with self._task_lock:
+            for future in self._active_tasks.values():
+                future.cancel()
+            self._active_tasks.clear()
+        
+        # 关闭线程池
+        self.executor.shutdown(wait=True)
+        self.logger.info("Pipeline已停止")
+    
+    def _main_loop(self):
+        """主处理循环"""
+        while self._running and not self._stop_event.is_set():
+            try:
+                # 处理各个阶段
+                for stage_name, stage in self.stages.items():
+                    if self._stop_event.is_set():
+                        break
+                    
+                    self._process_stage(stage_name, stage)
+                
+                # 清理完成的任务
+                self._cleanup_completed_tasks()
+                
+                # 短暂休息
+                time.sleep(1)
+                
+            except Exception as e:
+                self.logger.error(f"主处理循环异常: {str(e)}")
+                time.sleep(5)  # 出错时稍长时间休息
+    
+    def _process_stage(self, stage_name: str, stage: BaseStage):
+        """
+        处理单个阶段
+        
+        Args:
+            stage_name: 阶段名称
+            stage: 阶段实例
+        """
+        try:
+            # 阶段名到状态阶段的映射
+            stage_mapping = {
+                'data_collection': 'data_collection',
+                'search': 'search',
+                'download': 'download', 
+                'upload': 'upload'
+            }
+            
+            stage_key = stage_mapping.get(stage_name, stage_name)
+            
+            # 获取该阶段可处理的书籍
+            books = self.state_manager.get_books_by_stage(stage_key, limit=10)
+            
+            if not books:
+                return
+            
+            self.logger.debug(f"阶段 {stage_name} 找到 {len(books)} 本待处理书籍")
+            
+            # 收集可处理的书籍ID，避免会话绑定问题
+            processable_book_ids = []
+            for book in books:
+                if stage.can_process(book):
+                    processable_book_ids.append((book.id, book.title))
+            
+            if not processable_book_ids:
+                return
+            
+            # 检查是否还有可用的工作线程
+            active_count = len([f for f in self._active_tasks.values() if not f.done()])
+            available_slots = self.max_workers - active_count
+            
+            if available_slots <= 0:
+                return
+            
+            # 提交任务到线程池
+            for book_id, book_title in processable_book_ids[:available_slots]:
+                if self._stop_event.is_set():
+                    break
+                
+                # 使用包装函数，在独立会话中执行阶段处理
+                future = self.executor.submit(self._execute_stage_with_session, stage, book_id)
+                
+                with self._task_lock:
+                    self._active_tasks[book_id] = future
+                
+                self.logger.debug(f"提交任务: 书籍 {book_title} 到阶段 {stage_name}")
+            
+        except Exception as e:
+            self.logger.error(f"处理阶段 {stage_name} 时出错: {str(e)}")
+    
+    def _execute_stage_with_session(self, stage: BaseStage, book_id: int) -> bool:
+        """
+        在独立会话中执行阶段处理
+        
+        Args:
+            stage: 处理阶段
+            book_id: 书籍ID
+            
+        Returns:
+            bool: 处理是否成功
+        """
+        try:
+            # 在独立会话中获取书籍并执行处理
+            with self.state_manager.get_session() as session:
+                book = session.query(DoubanBook).get(book_id)
+                if not book:
+                    self.logger.error(f"找不到书籍: {book_id}")
+                    return False
+                
+                # 执行阶段处理
+                return stage.execute(book)
+                
+        except Exception as e:
+            self.logger.error(f"执行阶段处理失败: {str(e)}")
+            return False
+    
+    def _cleanup_completed_tasks(self):
+        """清理已完成的任务"""
+        with self._task_lock:
+            completed_ids = [
+                book_id for book_id, future in self._active_tasks.items()
+                if future.done()
+            ]
+            
+            for book_id in completed_ids:
+                del self._active_tasks[book_id]
+    
+    def get_status(self) -> Dict[str, Any]:
+        """
+        获取Pipeline状态
+        
+        Returns:
+            Dict[str, Any]: 状态信息
+        """
+        status = {
+            'running': self._running,
+            'active_tasks': len(self._active_tasks),
+            'max_workers': self.max_workers,
+            'registered_stages': list(self.stages.keys()),
+            'book_statistics': self.state_manager.get_status_statistics()
+        }
+        
+        return status
+    
+    def reset_stuck_tasks(self, timeout_minutes: int = 30) -> int:
+        """
+        重置卡住的任务
+        
+        Args:
+            timeout_minutes: 超时时间（分钟）
+            
+        Returns:
+            int: 重置的任务数量
+        """
+        return self.state_manager.reset_stuck_statuses(timeout_minutes)

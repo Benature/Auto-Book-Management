@@ -5,7 +5,7 @@
 定义 SQLAlchemy ORM 模型。
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float, Boolean, JSON
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -15,16 +15,34 @@ Base = declarative_base()
 
 
 class BookStatus(enum.Enum):
-    """书籍状态枚举"""
-    NEW = "new"  # 豆瓣中新发现的书籍
-    WITH_DETAIL = "with_detail"  # 已获取详细信息
-    MATCHED = "matched"  # 已在 Calibre 中匹配到，结束节点
-    SEARCHING = "searching"  # 正在从 Z-Library 搜索
-    SEARCH_NOT_FOUND = "search_not_found"  # 未在 Z-Library 找到
-    DOWNLOADING = "downloading"  # 正在从 Z-Library 下载
-    DOWNLOADED = "downloaded"  # 已从 Z-Library 下载
-    UPLOADING = "uploading"  # 正在上传到 Calibre
-    UPLOADED = "uploaded"  # 已上传到 Calibre，结束节点
+    """书籍状态枚举 - 重构为分阶段pipeline架构"""
+    # 数据收集阶段
+    NEW = "new"                           # 豆瓣新发现
+    DETAIL_FETCHING = "detail_fetching"   # 获取详情中
+    DETAIL_COMPLETE = "detail_complete"   # 详情完成
+    
+    # 搜索阶段  
+    SEARCH_QUEUED = "search_queued"       # 排队搜索
+    SEARCH_ACTIVE = "search_active"       # 搜索中
+    SEARCH_COMPLETE = "search_complete"   # 搜索完成有结果
+    SEARCH_NO_RESULTS = "search_no_results"  # 搜索无结果
+    
+    # 下载阶段
+    DOWNLOAD_QUEUED = "download_queued"   # 排队下载
+    DOWNLOAD_ACTIVE = "download_active"   # 下载中
+    DOWNLOAD_COMPLETE = "download_complete"  # 下载完成
+    DOWNLOAD_FAILED = "download_failed"   # 下载失败
+    
+    # 上传阶段
+    UPLOAD_QUEUED = "upload_queued"       # 排队上传
+    UPLOAD_ACTIVE = "upload_active"       # 上传中
+    UPLOAD_COMPLETE = "upload_complete"   # 上传完成
+    UPLOAD_FAILED = "upload_failed"       # 上传失败
+    
+    # 终态
+    COMPLETED = "completed"               # 成功完成
+    SKIPPED_EXISTS = "skipped_exists"     # 已存在跳过
+    FAILED_PERMANENT = "failed_permanent" # 永久失败
 
 
 class DoubanBook(Base):
@@ -167,3 +185,71 @@ class BookStatusHistory(Base):
     def __repr__(self):
         old_status_str = self.old_status.value if self.old_status else None
         return f"<BookStatusHistory(id={self.id}, book_id={self.book_id}, {old_status_str} -> {self.new_status.value})>"
+
+
+class ProcessingTask(Base):
+    """处理任务数据模型 - 支持Pipeline架构"""
+    __tablename__ = 'processing_tasks'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('douban_books.id'), nullable=False, index=True)
+    stage = Column(String(50), nullable=False, index=True)  # data_collection, search, download, upload, cleanup
+    status = Column(String(50), nullable=False, index=True)  # queued, active, completed, failed, skipped
+    priority = Column(Integer, default=0, index=True)  # 优先级，数字越大优先级越高
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+    error_message = Column(Text)
+    error_type = Column(String(100))  # network, auth, resource_not_found, system, etc.
+    task_data = Column(JSON)  # 任务相关的额外数据
+    assigned_worker = Column(String(100))  # 分配的工作进程ID
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    next_retry_at = Column(DateTime)  # 下次重试时间
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # 关联关系
+    book = relationship("DoubanBook")
+    
+    def __repr__(self):
+        return f"<ProcessingTask(id={self.id}, book_id={self.book_id}, stage='{self.stage}', status='{self.status}')>"
+
+
+class SystemConfig(Base):
+    """系统配置数据模型"""
+    __tablename__ = 'system_config'
+    
+    id = Column(Integer, primary_key=True)
+    key = Column(String(100), unique=True, nullable=False, index=True)
+    value = Column(Text)
+    value_type = Column(String(50), default='string')  # string, int, float, bool, json
+    description = Column(Text)
+    category = Column(String(50), index=True)  # pipeline, service, notification, etc.
+    is_sensitive = Column(Boolean, default=False)  # 是否为敏感信息（如密码）
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    def __repr__(self):
+        return f"<SystemConfig(key='{self.key}', category='{self.category}')>"
+
+
+class WorkerStatus(Base):
+    """工作进程状态数据模型"""
+    __tablename__ = 'worker_status'
+    
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(String(100), unique=True, nullable=False, index=True)
+    worker_type = Column(String(50), nullable=False, index=True)  # douban_scraper, zlibrary_service, calibre_service
+    status = Column(String(50), nullable=False, index=True)  # idle, busy, error, offline
+    current_task_id = Column(Integer, ForeignKey('processing_tasks.id'))
+    last_heartbeat = Column(DateTime, index=True)
+    error_message = Column(Text)
+    worker_info = Column(JSON)  # 工作进程的额外信息
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    
+    # 关联关系
+    current_task = relationship("ProcessingTask")
+    
+    def __repr__(self):
+        return f"<WorkerStatus(worker_id='{self.worker_id}', type='{self.worker_type}', status='{self.status}')>"
