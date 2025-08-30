@@ -18,6 +18,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import asyncio
 import traceback
+import requests
 
 import zlibrary
 import difflib
@@ -133,6 +134,8 @@ class ZLibrarySearchService:
             raise ProcessingError("搜索参数不足，没有适用的搜索策略")
 
         # 按优先级执行搜索
+        last_network_error = None
+
         for strategy in applicable_strategies:
             try:
                 results = self._execute_search_strategy(strategy)
@@ -140,9 +143,24 @@ class ZLibrarySearchService:
                     self.consecutive_errors = 0  # 重置错误计数
                     return results
 
+            except NetworkError as e:
+                # 网络错误，记录但继续尝试其他策略
+                last_network_error = e
+                self.logger.error(f"策略 {strategy['priority']} 网络错误: {str(e)}")
+                self.consecutive_errors += 1
+                # 网络错误不需要额外延迟，_execute_search_strategy已经处理了
+                continue
+
+            except (ResourceNotFoundError, ProcessingError) as e:
+                # 资源不存在或处理错误，继续尝试其他策略
+                self.logger.warning(f"策略 {strategy['priority']} 失败: {str(e)}")
+                continue
+
             except Exception as e:
+                # 其他未知错误
                 traceback.print_exc()
-                self.logger.error(f"策略 {strategy['priority']} 搜索失败: {str(e)}")
+                self.logger.error(
+                    f"策略 {strategy['priority']} 发生未知错误: {str(e)}")
                 self.consecutive_errors += 1
                 self._smart_delay(base_min=3.0,
                                   base_max=6.0,
@@ -150,8 +168,14 @@ class ZLibrarySearchService:
                 continue
 
         # 所有策略都失败
-        self.logger.warning("所有搜索策略都未找到结果")
-        raise ResourceNotFoundError("未找到匹配的书籍")
+        if last_network_error:
+            # 如果有网络错误，优先抛出网络错误
+            self.logger.error("所有搜索策略都因网络错误失败")
+            raise last_network_error
+        else:
+            # 否则表示没有找到匹配结果
+            self.logger.warning("所有搜索策略都未找到结果")
+            raise ResourceNotFoundError("未找到匹配的书籍")
 
     def _get_applicable_strategies(self, title: str, author: str, isbn: str,
                                    publisher: str) -> List[Dict[str, Any]]:
@@ -186,31 +210,58 @@ class ZLibrarySearchService:
 
     def _execute_search_strategy(
             self, strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """执行单个搜索策略"""
+        """执行单个搜索策略，包含重试机制"""
         self.logger.info(f"尝试策略 {strategy['priority']}: {strategy['name']}")
         self.logger.info(f"搜索查询: {strategy['query']}")
 
-        # 智能延迟
-        self._smart_delay(request_type="search")
-        self.request_count += 1
+        max_retries = 3
+        base_delay = 2.0
 
-        # 执行搜索 - 处理连接重置错误
-        try:
-            first_set = asyncio.run(self._async_search_books(
-                strategy['query']))
-        except Exception as e:
-            # 检查是否是连接重置错误
-            error_msg = str(e)
-            if "Connection reset by peer" in error_msg or "[Errno 54]" in error_msg:
-                self.logger.warning(f"遇到连接重置错误，跳过此次查询: {error_msg}")
-                raise NetworkError(f"连接重置错误: {error_msg}")
-            else:
-                # 其他类型的错误重新抛出
-                raise
+        for attempt in range(1, max_retries + 1):
+            try:
+                # 智能延迟
+                self._smart_delay(request_type="search")
+                self.request_count += 1
+
+                # 执行搜索
+                first_set = asyncio.run(
+                    self._async_search_books(strategy['query']))
+
+                # 搜索成功，重置错误计数
+                self.consecutive_errors = 0
+                break
+
+            except Exception as e:
+                error_msg = str(e)
+                is_connection_reset = ("Connection reset by peer" in error_msg
+                                       or "[Errno 54]" in error_msg
+                                       or "ClientOSError" in str(type(e)))
+
+                if is_connection_reset and attempt < max_retries:
+                    # 连接重置错误，可以重试
+                    retry_delay = base_delay * (2**(attempt - 1))  # 指数退避
+                    self.logger.warning(
+                        f"遇到连接重置错误，{retry_delay}秒后进行第{attempt + 1}次尝试: {error_msg}"
+                    )
+                    self.consecutive_errors += 1
+                    time.sleep(retry_delay)
+                    continue
+                elif is_connection_reset:
+                    # 重试次数用完，抛出网络错误
+                    self.logger.error(
+                        f"连接重置错误重试{max_retries}次后仍失败: {error_msg}")
+                    raise NetworkError(
+                        f"连接重置错误（重试{max_retries}次后失败）: {error_msg}")
+                else:
+                    # 其他类型的错误直接抛出
+                    self.logger.error(f"搜索过程中遇到非网络错误: {error_msg}")
+                    raise
+        else:
+            # for循环没有break，说明重试用完了
+            raise NetworkError("搜索重试次数用完")
 
         if not first_set:
             self.logger.info(f"搜索无结果")
-
             return []
 
         # 处理结果
@@ -514,6 +565,7 @@ class ZLibraryDownloadService:
         self.logger.info(f"开始下载: {title}")
 
         # 获取书籍ID
+        print(book_info)
         book_id = book_info.get('zlibrary_id') or book_info.get('id')
         if not book_id:
             raise ProcessingError("书籍信息中缺少ID，无法下载")
@@ -527,44 +579,69 @@ class ZLibraryDownloadService:
                 self._smart_delay(request_type="download")
                 self.request_count += 1
 
-                # 执行下载
-                download_result = asyncio.run(self.lib.download(book_id))
-
-                if download_result:
-                    self._save_download_result(download_result, file_path)
-                    self.consecutive_errors = 0
-                    self.logger.info(f"下载成功: {file_path}")
-                    return str(file_path)
-                else:
-                    raise ProcessingError("下载结果为空")
+                # 获取下载链接
+                download_url = book_info.get('download_url')
+                if not download_url:
+                    raise ProcessingError(f"书籍信息中缺少下载链接: {book_id}")
+                
+                # 使用requests下载文件
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                
+                response = requests.get(download_url, headers=headers, stream=True, timeout=30)
+                response.raise_for_status()
+                
+                # 保存文件
+                with open(str(file_path), 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                self.consecutive_errors = 0
+                self.logger.info(f"下载成功: {file_path}")
+                return str(file_path)
 
             except Exception as e:
+                error_msg = str(e)
+                is_connection_reset = ("Connection reset by peer" in error_msg
+                                       or "[Errno 54]" in error_msg
+                                       or "ClientOSError" in str(type(e)))
+
                 self.consecutive_errors += 1
-                self.logger.error(f"下载尝试 {attempt} 失败: {str(e)}")
+
+                if is_connection_reset:
+                    self.logger.warning(
+                        f"下载尝试 {attempt} 遇到连接重置错误: {error_msg}")
+                else:
+                    self.logger.error(f"下载尝试 {attempt} 失败: {error_msg}")
 
                 if attempt < self.max_retries:
-                    self._smart_delay(base_min=5.0,
-                                      base_max=10.0,
-                                      request_type="error")
+                    # 根据错误类型选择延迟时间
+                    if is_connection_reset:
+                        # 连接重置错误，使用指数退避
+                        retry_delay = 2.0 * (2**(attempt - 1))
+                        self.logger.info(f"连接重置错误，{retry_delay}秒后重试")
+                        time.sleep(retry_delay)
+                    else:
+                        # 其他错误，使用原有延迟
+                        self._smart_delay(base_min=5.0,
+                                          base_max=10.0,
+                                          request_type="error")
                 else:
                     # 最后一次尝试失败，判断错误类型
-                    if "not found" in str(e).lower() or "404" in str(e):
-                        raise ResourceNotFoundError(f"书籍文件不存在: {str(e)}")
+                    if is_connection_reset:
+                        raise NetworkError(
+                            f"连接重置错误（重试{self.max_retries}次后失败）: {error_msg}")
+                    elif "not found" in error_msg.lower(
+                    ) or "404" in error_msg:
+                        raise ResourceNotFoundError(f"书籍文件不存在: {error_msg}")
                     else:
-                        raise ProcessingError(f"下载失败: {str(e)}")
+                        raise ProcessingError(f"下载失败: {error_msg}")
 
         return None
 
-    def _save_download_result(self, download_result: Any, file_path: Path):
-        """保存下载结果"""
-        with open(str(file_path), 'wb') as f:
-            if isinstance(download_result, bytes):
-                f.write(download_result)
-            elif hasattr(download_result, 'read'):
-                f.write(download_result.read())
-            else:
-                # 测试模式
-                f.write(b'test content')
+    # 已删除 _save_download_result，直接使用requests下载
 
     def _sanitize_filename(self, filename: str) -> str:
         """清理文件名"""
@@ -685,41 +762,7 @@ class ZLibraryServiceV2:
 
         return self.download_service.download_book(book_info, output_dir)
 
-    def search_and_download(self,
-                            title: str = None,
-                            author: str = None,
-                            isbn: str = None,
-                            publisher: str = None,
-                            output_dir: str = None) -> Optional[str]:
-        """
-        搜索并下载书籍
-        
-        Args:
-            title: 书名
-            author: 作者
-            isbn: ISBN
-            publisher: 出版社
-            output_dir: 输出目录
-            
-        Returns:
-            Optional[str]: 下载的文件路径
-        """
-        try:
-            # 搜索书籍
-            search_results = self.search_books(title, author, isbn, publisher)
-
-            if not search_results:
-                return None
-
-            # 选择最佳格式
-            best_book = self._select_best_format(search_results)
-
-            # 下载书籍
-            return self.download_book(best_book, output_dir)
-
-        except Exception as e:
-            self.logger.error(f"搜索并下载失败: {str(e)}")
-            raise
+    # 已删除 search_and_download 方法，完全分离 search 和 download 步骤
 
     def _select_best_format(self, results: List[Dict[str,
                                                      Any]]) -> Dict[str, Any]:

@@ -6,9 +6,8 @@
 """
 
 from typing import Dict, Any, List
-from sqlalchemy.orm import Session
 
-from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadQueue
+from db.models import BookStatus, DoubanBook, ZLibraryBook
 from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
 from core.state_manager import BookStateManager
 from services.zlibrary_service_v2 import ZLibraryServiceV2
@@ -39,7 +38,6 @@ class SearchStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        return True
         # 如果是DETAIL_COMPLETE状态，先转换为SEARCH_QUEUED
         if book.status == BookStatus.DETAIL_COMPLETE:
             self.state_manager.transition_status(book.id,
@@ -47,7 +45,7 @@ class SearchStage(BaseStage):
                                                  "准备开始搜索")
             # 刷新book对象状态
             book.status = BookStatus.SEARCH_QUEUED
-
+        self.logger.info(f"处理书籍: {book.title} {book.status}")
         return book.status == BookStatus.SEARCH_QUEUED
 
     def process(self, book: DoubanBook) -> bool:
@@ -204,9 +202,7 @@ class SearchStage(BaseStage):
                 # session的commit在get_session上下文管理器中自动处理
                 if saved_count > 0:
                     self.logger.info(f"保存了 {saved_count} 个Z-Library搜索结果")
-
-                    # 为当前豆瓣书籍选择匹配度最高的Z-Library书籍并添加到下载队列
-                    self._add_best_match_to_download_queue(book, session)
+                    # 搜索完成后不自动添加到下载队列，交由DownloadStage处理
 
             return saved_count
 
@@ -214,91 +210,4 @@ class SearchStage(BaseStage):
             self.logger.error(f"保存搜索结果失败: {str(e)}")
             return 0
 
-    def _add_best_match_to_download_queue(self, book: DoubanBook,
-                                          session: Session):
-        """
-        为豆瓣书籍选择匹配度最高的Z-Library书籍并添加到下载队列
-        
-        Args:
-            book: 豆瓣书籍对象
-            session: 数据库会话
-        """
-        try:
-            # 获取该豆瓣书籍的所有Z-Library搜索结果，按匹配度降序排列
-            best_match = session.query(ZLibraryBook).filter(
-                ZLibraryBook.douban_id == book.douban_id,
-                ZLibraryBook.download_url != '',  # 确保有下载链接
-                ZLibraryBook.download_url.is_not(None)).order_by(
-                    ZLibraryBook.match_score.desc()).first()
-
-            if not best_match:
-                self.logger.warning(f"未找到有效的Z-Library下载链接: {book.title}")
-                return
-
-            # 检查下载队列中是否已存在该豆瓣书籍
-            existing_queue_item = session.query(DownloadQueue).filter(
-                DownloadQueue.douban_book_id == book.id).first()
-
-            if existing_queue_item:
-                # 如果已存在，检查是否需要更新为更高匹配度的结果
-                existing_zlibrary_book = session.query(ZLibraryBook).filter(
-                    ZLibraryBook.id ==
-                    existing_queue_item.zlibrary_book_id).first()
-
-                if existing_zlibrary_book and best_match.match_score > existing_zlibrary_book.match_score:
-                    # 更新为更好的匹配结果
-                    existing_queue_item.zlibrary_book_id = best_match.id
-                    existing_queue_item.download_url = best_match.download_url
-                    self.logger.info(
-                        f"更新下载队列中的最佳匹配: {book.title} (得分: {best_match.match_score:.3f})"
-                    )
-                else:
-                    self.logger.debug(f"下载队列中已有更好或相同的匹配: {book.title}")
-            else:
-                # 创建新的下载队列项
-                download_queue_item = DownloadQueue(
-                    douban_book_id=book.id,
-                    zlibrary_book_id=best_match.id,
-                    download_url=best_match.download_url,
-                    priority=self._calculate_download_priority(best_match),
-                    status='queued')
-
-                session.add(download_queue_item)
-                self.logger.info(
-                    f"添加到下载队列: {book.title} -> {best_match.title} (得分: {best_match.match_score:.3f}, 格式: {best_match.extension})"
-                )
-
-        except Exception as e:
-            self.logger.error(f"添加到下载队列失败: {str(e)}")
-
-    def _calculate_download_priority(self, zlibrary_book: ZLibraryBook) -> int:
-        """
-        计算下载优先级
-        
-        Args:
-            zlibrary_book: Z-Library书籍对象
-            
-        Returns:
-            int: 优先级数值，越高越优先
-        """
-        priority = 0
-
-        # 基础匹配度优先级 (0-100)
-        priority += int(zlibrary_book.match_score * 100)
-
-        # 文件格式优先级
-        format_priority = {
-            'epub': 50,
-            'mobi': 40,
-            'azw3': 35,
-            'pdf': 20,
-            'djvu': 10
-        }
-        priority += format_priority.get(zlibrary_book.extension.lower(), 0)
-
-        # 文件质量优先级
-        if zlibrary_book.quality:
-            quality_priority = {'high': 30, 'medium': 20, 'low': 10}
-            priority += quality_priority.get(zlibrary_book.quality.lower(), 0)
-
-        return priority
+    # 删除队列管理功能，专注于搜索
