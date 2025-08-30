@@ -2,6 +2,7 @@
 
 - 所有log都写在logs目录下
 - 非必要不写try
+- 测试写在tests目录下，使用pytest风格
 
 ## Common Development Commands
 

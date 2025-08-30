@@ -564,11 +564,22 @@ class ZLibraryDownloadService:
 
         self.logger.info(f"开始下载: {title}")
 
-        # 获取书籍ID
-        print(book_info)
-        book_id = book_info.get('zlibrary_id') or book_info.get('id')
-        if not book_id:
-            raise ProcessingError("书籍信息中缺少ID，无法下载")
+        # # 获取书籍ID
+        # book_id = book_info.get('zlibrary_id') or book_info.get('id')
+
+        # # 如果ID为空或为'None'字符串，尝试从type:download_url中提取
+        # if not book_id or book_id == 'None':
+        #     download_url = book_info.get('download_url', '')
+        #     if download_url:
+        #         # 从 URL 中提取 ID，格式类似 https://z-library.sk/dl/25295952/7c99fd
+        #         import re
+        #         match = re.search(r'/dl/(\d+)/', download_url)
+        #         if match:
+        #             book_id = match.group(1)
+        #             self.logger.info(f"从下载链接提取到ID: {book_id}")
+
+        # if not book_id or book_id == 'None':
+        #     raise ProcessingError("书籍信息中缺少ID，且无法从下载链接提取")
 
         # 执行下载，支持重试
         for attempt in range(1, self.max_retries + 1):
@@ -579,25 +590,54 @@ class ZLibraryDownloadService:
                 self._smart_delay(request_type="download")
                 self.request_count += 1
 
-                # 获取下载链接
+                # 获取下载链接（优先使用book_info中的，否则使用zlibrary API获取）
                 download_url = book_info.get('download_url')
                 if not download_url:
-                    raise ProcessingError(f"书籍信息中缺少下载链接: {book_id}")
-                
+                    self.logger.info(f"未找到直接下载链接，尝试使用Z-Library API获取")
+                    # 这里可以添加通过zlibrary API获取下载链接的逻辑
+                    raise ProcessingError(f"书籍信息中缺少下载链接")
+
                 # 使用requests下载文件
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Referer':
+                    'https://z-library.sk/',
+                    'Accept':
+                    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
                 }
-                
-                response = requests.get(download_url, headers=headers, stream=True, timeout=30)
-                response.raise_for_status()
-                
+
+                self.logger.info(f"使用链接下载: {download_url}")
+
+                response = requests.get(download_url,
+                                        headers=headers,
+                                        stream=True,
+                                        timeout=30)
+
+                # 检查响应状态
+                if response.status_code != 200:
+                    raise ProcessingError(
+                        f"下载失败，HTTP状态码: {response.status_code}")
+
+                # 检查内容类型
+                content_type = response.headers.get('content-type', '')
+                self.logger.info(f"响应内容类型: {content_type}")
+
+                # 检查文件大小
+                content_length = response.headers.get('content-length')
+                if content_length:
+                    self.logger.info(f"文件大小: {int(content_length):,} bytes")
+
                 # 保存文件
+                downloaded_size = 0
                 with open(str(file_path), 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
-                
+                            downloaded_size += len(chunk)
+
+                self.logger.info(f"下载完成，实际大小: {downloaded_size:,} bytes")
+
                 self.consecutive_errors = 0
                 self.logger.info(f"下载成功: {file_path}")
                 return str(file_path)
