@@ -60,6 +60,7 @@ class ZLibrarySearchService:
 
         # 客户端实例
         self.lib = None
+
         self.ensure_connected()
 
         # 搜索策略
@@ -97,6 +98,7 @@ class ZLibrarySearchService:
         """确保客户端已连接"""
         try:
             if self.lib is None:
+                self.logger.info('开始登陆Zlibrary')
                 self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
                 asyncio.run(self.lib.login(self.__email, self.__password))
             return True
@@ -547,7 +549,7 @@ class ZLibraryDownloadService:
         output_path = Path(output_dir)
         os.makedirs(output_path, exist_ok=True)
 
-        # 构建文件名
+        # 暂时构建默认文件名（如果响应头中没有文件名会使用这个）
         title = book_info.get('title', 'Unknown')
         authors = book_info.get('authors', 'Unknown')
         extension = book_info.get('extension', 'epub')
@@ -558,9 +560,8 @@ class ZLibraryDownloadService:
         else:
             author = authors
 
-        file_name = f"{title} - {author}.{extension}"
-        file_name = self._sanitize_filename(file_name)
-        file_path = output_path / file_name
+        default_file_name = f"{title} - {author}.{extension}"
+        default_file_name = self._sanitize_filename(default_file_name)
 
         self.logger.info(f"开始下载: {title}")
 
@@ -584,7 +585,7 @@ class ZLibraryDownloadService:
         # 执行下载，支持重试
         for attempt in range(1, self.max_retries + 1):
             try:
-                self.logger.info(f"下载尝试 {attempt}/{self.max_retries}")
+                self.logger.info(f"下载尝试 {title} {attempt}/{self.max_retries}")
 
                 # 智能延迟
                 self._smart_delay(request_type="download")
@@ -593,9 +594,9 @@ class ZLibraryDownloadService:
                 # 获取下载链接（优先使用book_info中的，否则使用zlibrary API获取）
                 download_url = book_info.get('download_url')
                 if not download_url:
-                    self.logger.info(f"未找到直接下载链接，尝试使用Z-Library API获取")
+                    self.logger.info(f"未找到 {title} 直接下载链接，尝试使用Z-Library API获取")
                     # 这里可以添加通过zlibrary API获取下载链接的逻辑
-                    raise ProcessingError(f"书籍信息中缺少下载链接")
+                    raise ProcessingError(f"{title} 书籍信息中缺少下载链接")
 
                 # 使用requests下载文件
                 headers = {
@@ -609,8 +610,29 @@ class ZLibraryDownloadService:
 
                 self.logger.info(f"使用链接下载: {download_url}")
 
+                # 使用 AsyncZlib 的 cookies
+                cookies = None
+                if self.lib and hasattr(self.lib,
+                                        'cookies') and self.lib.cookies:
+                    try:
+                        # 将 aiohttp cookies 转换为 requests 可用的格式
+                        cookies = {}
+                        if hasattr(self.lib.cookies, '_cookies'):
+                            for domain_cookies in self.lib.cookies._cookies.values(
+                            ):
+                                for path_cookies in domain_cookies.values():
+                                    for cookie in path_cookies.values():
+                                        cookies[cookie.key] = cookie.value
+                        self.logger.info(
+                            f"使用 AsyncZlib cookies，共 {len(cookies)} 个")
+                    except Exception as e:
+                        self.logger.warning(
+                            f"获取 AsyncZlib cookies 失败: {str(e)}")
+                        cookies = None
+
                 response = requests.get(download_url,
                                         headers=headers,
+                                        cookies=cookies,
                                         stream=True,
                                         timeout=30)
 
@@ -627,6 +649,21 @@ class ZLibraryDownloadService:
                 content_length = response.headers.get('content-length')
                 if content_length:
                     self.logger.info(f"文件大小: {int(content_length):,} bytes")
+
+                # 尝试从响应头获取原始文件名
+                content_disposition = response.headers.get(
+                    'content-disposition', '')
+                original_filename = self._extract_filename_from_content_disposition(
+                    content_disposition)
+
+                if original_filename:
+                    self.logger.info(f"使用响应头中的原始文件名: {original_filename}")
+                    file_name = self._sanitize_filename(original_filename)
+                else:
+                    self.logger.info(f"响应头中没有文件名，使用默认文件名: {default_file_name}")
+                    file_name = default_file_name
+
+                file_path = output_path / file_name
 
                 # 保存文件
                 downloaded_size = 0
@@ -682,6 +719,36 @@ class ZLibraryDownloadService:
         return None
 
     # 已删除 _save_download_result，直接使用requests下载
+
+    def _extract_filename_from_content_disposition(
+            self, content_disposition: str) -> Optional[str]:
+        """从 Content-Disposition 头中提取文件名"""
+        if not content_disposition:
+            return None
+
+        # 匹配 filename="xxx" 或 filename*=UTF-8''xxx 格式
+        import re
+
+        # 首先尝试匹配 filename*=UTF-8''xxx 格式（RFC 5987）
+        match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition,
+                          re.IGNORECASE)
+        if match:
+            import urllib.parse
+            try:
+                filename = urllib.parse.unquote(match.group(1))
+                return filename
+            except:
+                pass
+
+        # 然后尝试匹配 filename="xxx" 或 filename=xxx 格式
+        match = re.search(r'filename[^;=\n]*=(([\'"])([^\'"]*?)\2|([^;\n]*))',
+                          content_disposition, re.IGNORECASE)
+        if match:
+            filename = match.group(3) or match.group(4)
+            if filename:
+                return filename.strip()
+
+        return None
 
     def _sanitize_filename(self, filename: str) -> str:
         """清理文件名"""
