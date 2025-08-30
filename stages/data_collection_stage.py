@@ -5,6 +5,8 @@
 负责从豆瓣获取书籍详细信息。
 """
 
+import time
+import random
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 
@@ -62,6 +64,11 @@ class DataCollectionStage(BaseStage):
             if not book.douban_url:
                 self.logger.error(f"书籍缺少豆瓣URL: {book.title}")
                 raise ProcessingError("书籍缺少豆瓣URL", "data_missing", retryable=False)
+            
+            # 豆瓣请求前添加3-5秒随机延迟，避免被限制
+            delay = random.uniform(3.0, 5.0)
+            self.logger.info(f"豆瓣请求延迟 {delay:.2f} 秒")
+            time.sleep(delay)
             
             detail_info = self.douban_scraper.get_book_detail(book.douban_url)
             

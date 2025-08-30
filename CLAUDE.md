@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 - 所有log都写在logs目录下
+- 非必要不写try
 
 ## Common Development Commands
 

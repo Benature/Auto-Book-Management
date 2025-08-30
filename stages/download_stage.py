@@ -66,10 +66,11 @@ class DownloadStage(BaseStage):
             self.logger.info(f"下载书籍: {book.title}")
             
             # 检查是否已有成功的下载记录
-            existing_download = self.db_session.query(DownloadRecord).filter(
-                DownloadRecord.book_id == book.id,
-                DownloadRecord.status == "success"
-            ).first()
+            with self.state_manager.get_session() as session:
+                existing_download = session.query(DownloadRecord).filter(
+                    DownloadRecord.book_id == book.id,
+                    DownloadRecord.status == "success"
+                ).first()
             
             if existing_download and existing_download.file_path and os.path.exists(existing_download.file_path):
                 self.logger.info(f"书籍已下载: {book.title}, 路径: {existing_download.file_path}")
@@ -89,18 +90,19 @@ class DownloadStage(BaseStage):
                 raise ProcessingError(f"下载失败: {book.title}")
             
             # 创建下载记录
-            download_record = DownloadRecord(
-                book_id=book.id,
-                zlibrary_id=best_zlibrary_book.zlibrary_id,
-                file_format=best_zlibrary_book.extension,
-                file_size=self._get_file_size(file_path),
-                file_path=file_path,
-                download_url=best_zlibrary_book.url,
-                status="success"
-            )
-            
-            self.db_session.add(download_record)
-            self.db_session.commit()
+            with self.state_manager.get_session() as session:
+                download_record = DownloadRecord(
+                    book_id=book.id,
+                    zlibrary_id=best_zlibrary_book.zlibrary_id,
+                    file_format=best_zlibrary_book.extension,
+                    file_size=self._get_file_size(file_path),
+                    file_path=file_path,
+                    download_url=best_zlibrary_book.url,
+                    status="success"
+                )
+                
+                session.add(download_record)
+                # session的commit在get_session上下文管理器中自动处理
             
             self.logger.info(f"成功下载书籍: {book.title}, 路径: {file_path}")
             return True
@@ -112,13 +114,14 @@ class DownloadStage(BaseStage):
             self.logger.error(f"下载书籍失败: {str(e)}")
             
             # 创建失败的下载记录
-            download_record = DownloadRecord(
-                book_id=book.id,
-                status="failed",
-                error_message=str(e)
-            )
-            self.db_session.add(download_record)
-            self.db_session.commit()
+            with self.state_manager.get_session() as session:
+                download_record = DownloadRecord(
+                    book_id=book.id,
+                    status="failed",
+                    error_message=str(e)
+                )
+                session.add(download_record)
+                # session的commit在get_session上下文管理器中自动处理
             
             # 判断错误类型
             if "timeout" in str(e).lower() or "connection" in str(e).lower():
@@ -154,10 +157,11 @@ class DownloadStage(BaseStage):
             Optional[ZLibraryBook]: 最佳书籍版本
         """
         # 获取所有可用的版本
-        zlibrary_books = self.db_session.query(ZLibraryBook).filter(
-            ZLibraryBook.douban_id == book.douban_id,
-            ZLibraryBook.is_available == True
-        ).all()
+        with self.state_manager.get_session() as session:
+            zlibrary_books = session.query(ZLibraryBook).filter(
+                ZLibraryBook.douban_id == book.douban_id,
+                ZLibraryBook.is_available == True
+            ).all()
         
         if not zlibrary_books:
             return None

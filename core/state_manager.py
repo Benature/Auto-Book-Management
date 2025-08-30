@@ -16,13 +16,12 @@ from utils.logger import get_logger
 
 class BookStateManager:
     """书籍状态管理器"""
-    
+
     # 定义允许的状态转换路径
     VALID_TRANSITIONS: Dict[BookStatus, Set[BookStatus]] = {
         # 数据收集阶段
         BookStatus.NEW: {
-            BookStatus.DETAIL_FETCHING,
-            BookStatus.SKIPPED_EXISTS,
+            BookStatus.DETAIL_FETCHING, BookStatus.SKIPPED_EXISTS,
             BookStatus.FAILED_PERMANENT
         },
         BookStatus.DETAIL_FETCHING: {
@@ -31,36 +30,29 @@ class BookStateManager:
             BookStatus.NEW  # 重试时回退
         },
         BookStatus.DETAIL_COMPLETE: {
-            BookStatus.SEARCH_QUEUED,
-            BookStatus.SKIPPED_EXISTS,
+            BookStatus.SEARCH_QUEUED, BookStatus.SKIPPED_EXISTS,
             BookStatus.FAILED_PERMANENT
         },
-        
+
         # 搜索阶段
-        BookStatus.SEARCH_QUEUED: {
-            BookStatus.SEARCH_ACTIVE,
-            BookStatus.FAILED_PERMANENT
-        },
+        BookStatus.SEARCH_QUEUED:
+        {BookStatus.SEARCH_ACTIVE, BookStatus.FAILED_PERMANENT},
         BookStatus.SEARCH_ACTIVE: {
             BookStatus.SEARCH_COMPLETE,
             BookStatus.SEARCH_NO_RESULTS,
             BookStatus.FAILED_PERMANENT,
             BookStatus.SEARCH_QUEUED  # 重试时回退
         },
-        BookStatus.SEARCH_COMPLETE: {
-            BookStatus.DOWNLOAD_QUEUED,
-            BookStatus.FAILED_PERMANENT
-        },
+        BookStatus.SEARCH_COMPLETE:
+        {BookStatus.DOWNLOAD_QUEUED, BookStatus.FAILED_PERMANENT},
         BookStatus.SEARCH_NO_RESULTS: {
             BookStatus.SEARCH_QUEUED,  # 重试
             BookStatus.FAILED_PERMANENT
         },
-        
+
         # 下载阶段
-        BookStatus.DOWNLOAD_QUEUED: {
-            BookStatus.DOWNLOAD_ACTIVE,
-            BookStatus.FAILED_PERMANENT
-        },
+        BookStatus.DOWNLOAD_QUEUED:
+        {BookStatus.DOWNLOAD_ACTIVE, BookStatus.FAILED_PERMANENT},
         BookStatus.DOWNLOAD_ACTIVE: {
             BookStatus.DOWNLOAD_COMPLETE,
             BookStatus.DOWNLOAD_FAILED,
@@ -76,26 +68,22 @@ class BookStateManager:
             BookStatus.DOWNLOAD_QUEUED,  # 重试
             BookStatus.FAILED_PERMANENT
         },
-        
+
         # 上传阶段
-        BookStatus.UPLOAD_QUEUED: {
-            BookStatus.UPLOAD_ACTIVE,
-            BookStatus.FAILED_PERMANENT
-        },
+        BookStatus.UPLOAD_QUEUED:
+        {BookStatus.UPLOAD_ACTIVE, BookStatus.FAILED_PERMANENT},
         BookStatus.UPLOAD_ACTIVE: {
             BookStatus.UPLOAD_COMPLETE,
             BookStatus.UPLOAD_FAILED,
             BookStatus.FAILED_PERMANENT,
             BookStatus.UPLOAD_QUEUED  # 重试时回退
         },
-        BookStatus.UPLOAD_COMPLETE: {
-            BookStatus.COMPLETED
-        },
+        BookStatus.UPLOAD_COMPLETE: {BookStatus.COMPLETED},
         BookStatus.UPLOAD_FAILED: {
             BookStatus.UPLOAD_QUEUED,  # 重试
             BookStatus.FAILED_PERMANENT
         },
-        
+
         # 终态 - 通常不允许转换，但可能需要重新处理
         BookStatus.COMPLETED: set(),  # 完成状态不允许转换
         BookStatus.SKIPPED_EXISTS: set(),  # 跳过状态不允许转换
@@ -107,40 +95,35 @@ class BookStateManager:
             BookStatus.UPLOAD_QUEUED
         }
     }
-    
+
     # 定义各阶段的状态
     STAGE_STATES = {
         'data_collection': {
-            BookStatus.NEW,
-            BookStatus.DETAIL_FETCHING,
+            BookStatus.NEW, BookStatus.DETAIL_FETCHING,
             BookStatus.DETAIL_COMPLETE
         },
         'search': {
-            BookStatus.SEARCH_QUEUED,
-            BookStatus.SEARCH_ACTIVE,
-            BookStatus.SEARCH_COMPLETE,
-            BookStatus.SEARCH_NO_RESULTS
+            BookStatus.SEARCH_QUEUED, BookStatus.SEARCH_ACTIVE,
+            BookStatus.SEARCH_COMPLETE, BookStatus.SEARCH_NO_RESULTS
         },
         'download': {
-            BookStatus.DOWNLOAD_QUEUED,
-            BookStatus.DOWNLOAD_ACTIVE,
-            BookStatus.DOWNLOAD_COMPLETE,
-            BookStatus.DOWNLOAD_FAILED
+            BookStatus.DOWNLOAD_QUEUED, BookStatus.DOWNLOAD_ACTIVE,
+            BookStatus.DOWNLOAD_COMPLETE, BookStatus.DOWNLOAD_FAILED
         },
         'upload': {
-            BookStatus.UPLOAD_QUEUED,
-            BookStatus.UPLOAD_ACTIVE,
-            BookStatus.UPLOAD_COMPLETE,
-            BookStatus.UPLOAD_FAILED
+            BookStatus.UPLOAD_QUEUED, BookStatus.UPLOAD_ACTIVE,
+            BookStatus.UPLOAD_COMPLETE, BookStatus.UPLOAD_FAILED
         },
         'final': {
-            BookStatus.COMPLETED,
-            BookStatus.SKIPPED_EXISTS,
+            BookStatus.COMPLETED, BookStatus.SKIPPED_EXISTS,
             BookStatus.FAILED_PERMANENT
         }
     }
 
-    def __init__(self, db_session: Session = None, session_factory: Callable = None, lark_service=None):
+    def __init__(self,
+                 db_session: Session = None,
+                 session_factory: Callable = None,
+                 lark_service=None):
         """
         初始化状态管理器
         
@@ -153,7 +136,7 @@ class BookStateManager:
         self.session_factory = session_factory
         self.lark_service = lark_service
         self.logger = get_logger("state_manager")
-    
+
     @contextmanager
     def get_session(self):
         """获取数据库会话的上下文管理器"""
@@ -172,9 +155,12 @@ class BookStateManager:
             # 使用现有会话
             yield self.db_session
         else:
-            raise ValueError("No session available: neither session_factory nor db_session provided")
+            raise ValueError(
+                "No session available: neither session_factory nor db_session provided"
+            )
 
-    def is_valid_transition(self, from_status: BookStatus, to_status: BookStatus) -> bool:
+    def is_valid_transition(self, from_status: BookStatus,
+                            to_status: BookStatus) -> bool:
         """
         检查状态转换是否有效
         
@@ -187,7 +173,7 @@ class BookStateManager:
         """
         if from_status not in self.VALID_TRANSITIONS:
             return False
-        
+
         return to_status in self.VALID_TRANSITIONS[from_status]
 
     def get_stage_for_status(self, status: BookStatus) -> Optional[str]:
@@ -205,7 +191,8 @@ class BookStateManager:
                 return stage
         return None
 
-    def get_next_stage_status(self, current_status: BookStatus) -> Optional[BookStatus]:
+    def get_next_stage_status(
+            self, current_status: BookStatus) -> Optional[BookStatus]:
         """
         获取下一阶段的起始状态
         
@@ -221,19 +208,17 @@ class BookStateManager:
             BookStatus.DOWNLOAD_COMPLETE: BookStatus.UPLOAD_QUEUED,
             BookStatus.UPLOAD_COMPLETE: BookStatus.COMPLETED
         }
-        
+
         return stage_transitions.get(current_status)
 
-    def transition_status(
-        self,
-        book_id: int,
-        to_status: BookStatus,
-        change_reason: str,
-        error_message: Optional[str] = None,
-        processing_time: Optional[float] = None,
-        sync_task_id: Optional[int] = None,
-        retry_count: int = 0
-    ) -> bool:
+    def transition_status(self,
+                          book_id: int,
+                          to_status: BookStatus,
+                          change_reason: str,
+                          error_message: Optional[str] = None,
+                          processing_time: Optional[float] = None,
+                          sync_task_id: Optional[int] = None,
+                          retry_count: int = 0) -> bool:
         """
         执行状态转换
         
@@ -256,54 +241,59 @@ class BookStateManager:
                 if not book:
                     self.logger.error(f"书籍不存在: ID {book_id}")
                     return False
-                
+
                 current_status = book.status
                 
+                self.logger.info(
+                    f"状态转换: {book_id} {current_status.value} -> {to_status.value} {change_reason}"
+                )
+
                 # 验证状态转换
                 if not self.is_valid_transition(current_status, to_status):
                     self.logger.error(
                         f"无效的状态转换: {current_status.value} -> {to_status.value} "
-                        f"(书籍ID: {book_id})"
-                    )
+                        f"(书籍ID: {book_id})")
                     return False
-                
+
                 # 更新书籍状态
                 old_status = book.status
                 book.status = to_status
                 book.updated_at = datetime.now()
-                
+
                 if error_message:
                     book.error_message = error_message
-                
+
                 # 创建状态历史记录
-                history = BookStatusHistory(
-                    book_id=book_id,
-                    old_status=old_status,
-                    new_status=to_status,
-                    change_reason=change_reason,
-                    error_message=error_message,
-                    sync_task_id=sync_task_id,
-                    processing_time=processing_time,
-                    retry_count=retry_count
-                )
-                
+                history = BookStatusHistory(book_id=book_id,
+                                            old_status=old_status,
+                                            new_status=to_status,
+                                            change_reason=change_reason,
+                                            error_message=error_message,
+                                            sync_task_id=sync_task_id,
+                                            processing_time=processing_time,
+                                            retry_count=retry_count)
+
                 session.add(history)
                 # 注意：commit由上下文管理器处理
-                
+
                 self.logger.info(
                     f"状态转换成功: 书籍ID {book_id}, {old_status.value} -> {to_status.value}"
                 )
-                
+
                 # 发送飞书通知
-                self._send_status_change_notification(book, old_status, to_status, change_reason, processing_time)
-                
+                self._send_status_change_notification(book, old_status,
+                                                      to_status, change_reason,
+                                                      processing_time)
+
                 return True
-            
+
         except Exception as e:
             self.logger.error(f"状态转换失败: {str(e)}")
             return False
 
-    def get_books_by_status(self, status: BookStatus, limit: Optional[int] = None) -> List[DoubanBook]:
+    def get_books_by_status(self,
+                            status: BookStatus,
+                            limit: Optional[int] = None) -> List[DoubanBook]:
         """
         根据状态获取书籍列表
         
@@ -316,17 +306,20 @@ class BookStateManager:
         """
         try:
             with self.get_session() as session:
-                query = session.query(DoubanBook).filter(DoubanBook.status == status)
-                
+                query = session.query(DoubanBook).filter(
+                    DoubanBook.status == status)
+
                 if limit:
                     query = query.limit(limit)
-                    
+
                 return query.all()
         except Exception as e:
             self.logger.error(f"获取书籍列表失败: {str(e)}")
             return []
 
-    def get_books_by_stage(self, stage: str, limit: Optional[int] = None) -> List[DoubanBook]:
+    def get_books_by_stage(self,
+                           stage: str,
+                           limit: Optional[int] = None) -> List[DoubanBook]:
         """
         根据阶段获取书籍列表
         
@@ -339,15 +332,16 @@ class BookStateManager:
         """
         if stage not in self.STAGE_STATES:
             return []
-        
+
         try:
             with self.get_session() as session:
                 stage_statuses = list(self.STAGE_STATES[stage])
-                query = session.query(DoubanBook).filter(DoubanBook.status.in_(stage_statuses))
-                
+                query = session.query(DoubanBook).filter(
+                    DoubanBook.status.in_(stage_statuses))
+
                 if limit:
                     query = query.limit(limit)
-                    
+
                 return query.all()
         except Exception as e:
             self.logger.error(f"获取阶段书籍列表失败: {str(e)}")
@@ -362,19 +356,18 @@ class BookStateManager:
         """
         try:
             from sqlalchemy import func
-            
+
             with self.get_session() as session:
                 stats = {}
-                results = session.query(
-                    DoubanBook.status,
-                    func.count(DoubanBook.id)
-                ).group_by(DoubanBook.status).all()
-                
+                results = session.query(DoubanBook.status,
+                                        func.count(DoubanBook.id)).group_by(
+                                            DoubanBook.status).all()
+
                 for status, count in results:
                     stats[status.value] = count
-                
+
                 return stats
-                
+
         except Exception as e:
             self.logger.error(f"获取状态统计失败: {str(e)}")
             return {}
@@ -392,9 +385,8 @@ class BookStateManager:
         try:
             with self.get_session() as session:
                 records = session.query(BookStatusHistory).order_by(
-                    BookStatusHistory.created_at.desc()
-                ).limit(limit).all()
-                
+                    BookStatusHistory.created_at.desc()).limit(limit).all()
+
                 # 转换为字典以避免DetachedInstanceError
                 result = []
                 for record in records:
@@ -408,7 +400,7 @@ class BookStateManager:
                         'processing_time': record.processing_time,
                         'retry_count': record.retry_count
                     })
-                
+
                 return result
         except Exception as e:
             self.logger.error(f"获取状态日志失败: {str(e)}")
@@ -426,21 +418,18 @@ class BookStateManager:
         """
         try:
             timeout_time = datetime.now() - timedelta(minutes=timeout_minutes)
-            
+
             # 查找长时间处于active状态的书籍
             stuck_statuses = [
-                BookStatus.DETAIL_FETCHING,
-                BookStatus.SEARCH_ACTIVE,
-                BookStatus.DOWNLOAD_ACTIVE,
-                BookStatus.UPLOAD_ACTIVE
+                BookStatus.DETAIL_FETCHING, BookStatus.SEARCH_ACTIVE,
+                BookStatus.DOWNLOAD_ACTIVE, BookStatus.UPLOAD_ACTIVE
             ]
-            
+
             with self.get_session() as session:
                 stuck_books = session.query(DoubanBook).filter(
                     DoubanBook.status.in_(stuck_statuses),
-                    DoubanBook.updated_at < timeout_time
-                ).all()
-                
+                    DoubanBook.updated_at < timeout_time).all()
+
                 # 重置到对应的queued状态
                 reset_mapping = {
                     BookStatus.DETAIL_FETCHING: BookStatus.NEW,
@@ -448,27 +437,24 @@ class BookStateManager:
                     BookStatus.DOWNLOAD_ACTIVE: BookStatus.DOWNLOAD_QUEUED,
                     BookStatus.UPLOAD_ACTIVE: BookStatus.UPLOAD_QUEUED
                 }
-                
+
                 # 收集需要重置的书籍ID，避免会话绑定问题
                 book_ids_to_reset = []
                 for book in stuck_books:
                     new_status = reset_mapping.get(book.status)
                     if new_status:
                         book_ids_to_reset.append((book.id, new_status))
-            
+
             # 在会话外进行状态转换
             reset_count = 0
             for book_id, new_status in book_ids_to_reset:
-                if self.transition_status(
-                    book_id,
-                    new_status,
-                    f"重置超时状态，超时时间: {timeout_minutes}分钟"
-                ):
+                if self.transition_status(book_id, new_status,
+                                          f"重置超时状态，超时时间: {timeout_minutes}分钟"):
                     reset_count += 1
-                
+
                 self.logger.info(f"重置了 {reset_count} 个卡住的状态")
                 return reset_count
-            
+
         except Exception as e:
             self.logger.error(f"重置卡住的状态失败: {str(e)}")
             return 0
@@ -489,18 +475,23 @@ class BookStateManager:
                 # 获取最近的状态历史记录数量
                 recent_failures = session.query(BookStatusHistory).filter(
                     BookStatusHistory.book_id == book_id,
-                    BookStatusHistory.error_message.isnot(None)
-                ).order_by(BookStatusHistory.created_at.desc()).limit(max_retries + 1).count()
-                
+                    BookStatusHistory.error_message.isnot(None)).order_by(
+                        BookStatusHistory.created_at.desc()).limit(
+                            max_retries + 1).count()
+
                 return recent_failures <= max_retries
-                
+
         except Exception as e:
             self.logger.error(f"检查重试次数失败: {str(e)}")
             return False
 
-    def _send_status_change_notification(self, book: DoubanBook, old_status: BookStatus, 
-                                       new_status: BookStatus, change_reason: str, 
-                                       processing_time: Optional[float] = None):
+    def _send_status_change_notification(
+            self,
+            book: DoubanBook,
+            old_status: BookStatus,
+            new_status: BookStatus,
+            change_reason: str,
+            processing_time: Optional[float] = None):
         """
         发送状态转换的飞书通知
         
@@ -513,7 +504,7 @@ class BookStateManager:
         """
         if not self.lark_service:
             return
-        
+
         try:
             # 获取状态的中文描述
             status_descriptions = {
@@ -536,30 +527,28 @@ class BookStateManager:
                 BookStatus.SKIPPED_EXISTS: "跳过(已存在)",
                 BookStatus.FAILED_PERMANENT: "❌ 永久失败"
             }
-            
+
             old_desc = status_descriptions.get(old_status, old_status.value)
             new_desc = status_descriptions.get(new_status, new_status.value)
-            
+
             # 构建消息内容
             message_parts = [
-                f"📚 **{book.title}**",
-                f"作者: {book.author or '未知'}",
-                f"状态: {old_desc} → {new_desc}",
-                f"原因: {change_reason}"
+                f"📚 **{book.title}**", f"作者: {book.author or '未知'}",
+                f"状态: {old_desc} → {new_desc}", f"原因: {change_reason}"
             ]
-            
+
             if processing_time:
                 message_parts.append(f"耗时: {processing_time:.2f}秒")
-            
+
             if book.isbn:
                 message_parts.append(f"ISBN: {book.isbn}")
-            
+
             message_parts.append(f"书籍ID: {book.id}")
-            
+
             message = "\n".join(message_parts)
-            
+
             # 发送通知
             self.lark_service.send_text_message(message)
-            
+
         except Exception as e:
             self.logger.warning(f"发送飞书通知失败: {str(e)}")

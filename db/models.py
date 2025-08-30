@@ -141,14 +141,20 @@ class ZLibraryBook(Base):
     authors = Column(String(500), index=True)  # 作者列表，用;;分隔
     publisher = Column(String(255))
     year = Column(String(10))
+    edition = Column(String(50))  # 版次信息
     language = Column(String(50))
     isbn = Column(String(20))
     extension = Column(String(10))  # epub, mobi, pdf 等
     size = Column(String(50))  # 文件大小（如 "15.11 MB"）
     url = Column(String(500))  # Z-Library书籍页面链接
     cover = Column(String(500))  # 封面图片链接
+    description = Column(Text)  # 书籍描述信息
+    categories = Column(String(255))  # 分类信息
+    categories_url = Column(String(500))  # 分类链接
+    download_url = Column(String(500))  # 下载链接
     rating = Column(String(10))  # 评分
     quality = Column(String(10))  # 质量评级
+    match_score = Column(Float, default=0.0, index=True)  # 匹配度得分(0.0-1.0)
     raw_json = Column(Text)  # 原始JSON数据
     download_count = Column(Integer, default=0)  # 下载次数统计
     is_available = Column(Boolean, default=True)  # 是否可用
@@ -160,7 +166,30 @@ class ZLibraryBook(Base):
     douban_book = relationship("DoubanBook", back_populates="zlibrary_books")
 
     def __repr__(self):
-        return f"<ZLibraryBook(id={self.id}, zlibrary_id='{self.zlibrary_id}', title='{self.title}', format='{self.extension}')>"
+        return f"<ZLibraryBook(id={self.id}, zlibrary_id='{self.zlibrary_id}', title='{self.title}', format='{self.extension}', score={self.match_score})>"
+
+
+class DownloadQueue(Base):
+    """下载队列数据模型 - 存储匹配度最高的待下载书籍"""
+    __tablename__ = 'download_queue'
+
+    id = Column(Integer, primary_key=True)
+    douban_book_id = Column(Integer, ForeignKey('douban_books.id'), nullable=False, unique=True, index=True)  # 每本豆瓣书只能有一个最佳匹配
+    zlibrary_book_id = Column(Integer, ForeignKey('zlibrary_books.id'), nullable=False, index=True)  # 关联最佳匹配的Z-Library书籍
+    download_url = Column(String(500), nullable=False)  # 直接下载链接
+    priority = Column(Integer, default=0, index=True)  # 下载优先级，数字越大越优先
+    status = Column(String(20), default='queued', index=True)  # queued, downloading, completed, failed
+    error_message = Column(Text)  # 错误信息
+    retry_count = Column(Integer, default=0)  # 重试次数
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # 关联关系
+    douban_book = relationship("DoubanBook")
+    zlibrary_book = relationship("ZLibraryBook")
+
+    def __repr__(self):
+        return f"<DownloadQueue(id={self.id}, douban_book_id={self.douban_book_id}, status='{self.status}', priority={self.priority})>"
 
 
 class BookStatusHistory(Base):
