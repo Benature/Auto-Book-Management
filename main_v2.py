@@ -130,10 +130,14 @@ class DoubanZLibraryCalibreV2:
             self.logger.info("调试模式已启用：使用单线程pipeline")
         
         # 任务调度器
+        max_concurrent_tasks = 1 if self.debug_mode else 10
         self.task_scheduler = TaskScheduler(
             self.state_manager,
-            max_concurrent_tasks=10
+            max_concurrent_tasks=max_concurrent_tasks
         )
+        
+        if self.debug_mode:
+            self.logger.info(f"调试模式：限制并发任务数为 {max_concurrent_tasks}")
         
         
         # 错误处理器
