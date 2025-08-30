@@ -43,15 +43,17 @@ from services.lark_service import LarkService
 class DoubanZLibraryCalibreV2:
     """豆瓣 Z-Library 同步工具主类 V2"""
 
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", debug_mode: bool = False):
         """
         初始化豆瓣 Z-Library 同步工具 V2
         
         Args:
             config_path: 配置文件路径
+            debug_mode: 调试模式，启用单线程pipeline
         """
         # 加载配置
         self.config_manager = ConfigManager(config_path)
+        self.debug_mode = debug_mode
         
         # 设置日志
         self._setup_logging()
@@ -118,10 +120,14 @@ class DoubanZLibraryCalibreV2:
         )
         
         # Pipeline管理器
+        max_workers = 1 if self.debug_mode else 4
         self.pipeline_manager = PipelineManager(
             self.state_manager,
-            max_workers=4
+            max_workers=max_workers
         )
+        
+        if self.debug_mode:
+            self.logger.info("调试模式已启用：使用单线程pipeline")
         
         # 任务调度器
         self.task_scheduler = TaskScheduler(
@@ -185,13 +191,14 @@ class DoubanZLibraryCalibreV2:
         self.pipeline_manager.register_stage(data_collection_stage)
         
         # 搜索阶段
+        zlib_config = self.config_manager.get_zlibrary_config()
         search_stage = SearchStage(
-            self.state_manager, self.zlibrary_service
+            self.state_manager, self.zlibrary_service,
+            min_match_score=zlib_config.get('min_match_score', 0.6)
         )
         self.pipeline_manager.register_stage(search_stage)
         
         # 下载阶段
-        zlib_config = self.config_manager.get_zlibrary_config()
         download_stage = DownloadStage(
             self.state_manager, self.zlibrary_service,
             download_dir=zlib_config.get('download_dir', 'data/downloads')
@@ -431,6 +438,11 @@ class DoubanZLibraryCalibreV2:
         if not pending_books:
             self.logger.info("没有待处理的书籍")
             return sync_result
+        
+        # 在debug模式下限制处理的书籍数量
+        if self.debug_mode and len(pending_books) > 3:
+            pending_books = pending_books[:3]
+            self.logger.info(f"调试模式：限制处理书籍数量为 {len(pending_books)} 本")
         
         self.logger.info(f"发现 {len(pending_books)} 本待处理书籍，开始Pipeline处理")
         
@@ -687,6 +699,7 @@ def main():
     parser.add_argument("-o", "--once", action="store_true", default=True, help="执行一次同步后退出")
     parser.add_argument("--cleanup", action="store_true", help="清理临时文件")
     parser.add_argument("--status", action="store_true", help="显示系统状态")
+    parser.add_argument("--debug", action="store_true", help="调试模式：单线程运行pipeline")
     
     args = parser.parse_args()
     
@@ -698,7 +711,7 @@ def main():
     
     # 创建应用实例
     try:
-        app = DoubanZLibraryCalibreV2(args.config)
+        app = DoubanZLibraryCalibreV2(args.config, debug_mode=args.debug)
         
         # 执行相应操作
         if args.cleanup:

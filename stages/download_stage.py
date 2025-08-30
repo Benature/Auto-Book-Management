@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 from sqlalchemy.orm import Session
 
-from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadRecord
+from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadRecord, DownloadQueue
 from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
 from core.state_manager import BookStateManager
 from services.zlibrary_service_v2 import ZLibraryServiceV2
@@ -50,7 +50,17 @@ class DownloadStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        return book.status in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]
+        # 检查书籍状态和下载队列中是否有待处理项
+        if book.status not in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]:
+            return False
+            
+        # 检查下载队列中是否有该书籍的待处理项
+        with self.state_manager.get_session() as session:
+            queue_item = session.query(DownloadQueue).filter(
+                DownloadQueue.douban_book_id == book.id,
+                DownloadQueue.status == 'queued'
+            ).first()
+            return queue_item is not None
     
     def process(self, book: DoubanBook) -> bool:
         """
@@ -76,33 +86,39 @@ class DownloadStage(BaseStage):
                 self.logger.info(f"书籍已下载: {book.title}, 路径: {existing_download.file_path}")
                 return True
             
-            # 获取最佳的Z-Library书籍版本
-            best_zlibrary_book_data = self._select_best_zlibrary_book(book)
+            # 从下载队列获取任务
+            queue_item_data = self._get_queue_item(book)
             
-            if not best_zlibrary_book_data:
-                self.logger.error(f"未找到可用的Z-Library书籍版本: {book.title}")
-                raise ResourceNotFoundError(f"未找到可用的Z-Library书籍版本: {book.title}")
+            if not queue_item_data:
+                self.logger.error(f"未找到下载队列项: {book.title}")
+                raise ResourceNotFoundError(f"未找到下载队列项: {book.title}")
+            
+            # 将队列项标记为正在下载
+            self._update_queue_status(queue_item_data['queue_id'], 'downloading')
             
             # 执行下载
-            file_path = self._download_book(book, best_zlibrary_book_data)
+            file_path = self._download_book(book, queue_item_data)
             
             if not file_path:
                 raise ProcessingError(f"下载失败: {book.title}")
             
-            # 创建下载记录
+            # 创建下载记录并更新队列状态
             with self.state_manager.get_session() as session:
                 download_record = DownloadRecord(
                     book_id=book.id,
-                    zlibrary_id=best_zlibrary_book_data['zlibrary_id'],
-                    file_format=best_zlibrary_book_data['extension'],
+                    zlibrary_id=queue_item_data['zlibrary_id'],
+                    file_format=queue_item_data['extension'],
                     file_size=self._get_file_size(file_path),
                     file_path=file_path,
-                    download_url=best_zlibrary_book_data.get('url', ''),
+                    download_url=queue_item_data.get('download_url', ''),
                     status="success"
                 )
                 
                 session.add(download_record)
                 # session的commit在get_session上下文管理器中自动处理
+            
+            # 标记队列项为完成
+            self._update_queue_status(queue_item_data['queue_id'], 'completed')
             
             self.logger.info(f"成功下载书籍: {book.title}, 路径: {file_path}")
             return True
@@ -113,7 +129,7 @@ class DownloadStage(BaseStage):
         except Exception as e:
             self.logger.error(f"下载书籍失败: {str(e)}")
             
-            # 创建失败的下载记录
+            # 创建失败的下载记录并更新队列状态
             with self.state_manager.get_session() as session:
                 download_record = DownloadRecord(
                     book_id=book.id,
@@ -122,6 +138,11 @@ class DownloadStage(BaseStage):
                 )
                 session.add(download_record)
                 # session的commit在get_session上下文管理器中自动处理
+            
+            # 标记队列项为失败
+            queue_item_data = self._get_queue_item(book)
+            if queue_item_data:
+                self._update_queue_status(queue_item_data['queue_id'], 'failed', str(e))
             
             # 判断错误类型
             if "timeout" in str(e).lower() or "connection" in str(e).lower():
@@ -146,65 +167,73 @@ class DownloadStage(BaseStage):
         else:
             return BookStatus.DOWNLOAD_FAILED
     
-    def _select_best_zlibrary_book(self, book: DoubanBook) -> Optional[Dict[str, Any]]:
+    def _get_queue_item(self, book: DoubanBook) -> Optional[Dict[str, Any]]:
         """
-        选择最佳的Z-Library书籍版本
+        获取下载队列项
         
         Args:
             book: 书籍对象
             
         Returns:
-            Optional[Dict[str, Any]]: 最佳书籍版本的数据字典
+            Optional[Dict[str, Any]]: 队列项数据字典
         """
-        # 获取所有可用的版本，并在会话内提取所需数据
         with self.state_manager.get_session() as session:
-            zlibrary_books = session.query(ZLibraryBook).filter(
-                ZLibraryBook.douban_id == book.douban_id,
-                ZLibraryBook.is_available == True
-            ).all()
+            queue_item = session.query(DownloadQueue).filter(
+                DownloadQueue.douban_book_id == book.id,
+                DownloadQueue.status.in_(['queued', 'downloading'])
+            ).first()
             
-            if not zlibrary_books:
+            if not queue_item:
                 return None
             
-            # 在会话内提取所有书籍数据
-            books_data = []
-            for zlib_book in zlibrary_books:
-                book_data = {
-                    'id': zlib_book.id,
-                    'zlibrary_id': zlib_book.zlibrary_id,
-                    'title': zlib_book.title,
-                    'authors': zlib_book.authors,
-                    'extension': zlib_book.extension,
-                    'size': zlib_book.size,
-                    'url': zlib_book.url,
-                    'download_url': zlib_book.download_url,
-                    'match_score': zlib_book.match_score,
-                    'douban_id': zlib_book.douban_id,
-                    'is_available': zlib_book.is_available
-                }
-                books_data.append(book_data)
-        
-        # 格式优先级（假设从配置获取）
-        format_priority = ['epub', 'mobi', 'pdf', 'azw3', 'txt']
-        
-        # 按格式优先级排序
-        for preferred_format in format_priority:
-            for book_data in books_data:
-                if book_data['extension'] and book_data['extension'].lower() == preferred_format.lower():
-                    self.logger.info(f"选择格式 {preferred_format}: {book_data['title']}")
-                    return book_data
-        
-        # 如果没有匹配的优先格式，返回第一个
-        self.logger.warning(f"未找到优先格式，使用默认: {books_data[0]['extension']}")
-        return books_data[0]
+            # 获取关联的ZLibraryBook数据
+            zlibrary_book = session.query(ZLibraryBook).filter(
+                ZLibraryBook.id == queue_item.zlibrary_book_id
+            ).first()
+            
+            if not zlibrary_book:
+                return None
+            
+            return {
+                'queue_id': queue_item.id,
+                'zlibrary_id': zlibrary_book.zlibrary_id,
+                'title': zlibrary_book.title,
+                'authors': zlibrary_book.authors,
+                'extension': zlibrary_book.extension,
+                'size': zlibrary_book.size,
+                'url': zlibrary_book.url,
+                'download_url': queue_item.download_url,
+                'priority': queue_item.priority,
+                'status': queue_item.status
+            }
     
-    def _download_book(self, book: DoubanBook, zlibrary_book_data: Dict[str, Any]) -> Optional[str]:
+    def _update_queue_status(self, queue_id: int, status: str, error_message: str = None):
+        """
+        更新队列项状态
+        
+        Args:
+            queue_id: 队列项ID
+            status: 新状态
+            error_message: 错误信息（可选）
+        """
+        with self.state_manager.get_session() as session:
+            queue_item = session.query(DownloadQueue).filter(
+                DownloadQueue.id == queue_id
+            ).first()
+            
+            if queue_item:
+                queue_item.status = status
+                if error_message:
+                    queue_item.error_message = error_message
+                # session的commit在get_session上下文管理器中自动处理
+    
+    def _download_book(self, book: DoubanBook, queue_item_data: Dict[str, Any]) -> Optional[str]:
         """
         下载书籍文件
         
         Args:
-            book: 豆瓣书籍对象
-            zlibrary_book_data: Z-Library书籍数据字典
+            book: 豆瓣书籍对象  
+            queue_item_data: 队列项数据字典
             
         Returns:
             Optional[str]: 下载的文件路径
@@ -212,10 +241,10 @@ class DownloadStage(BaseStage):
         try:
             # 构造book_info用于下载
             book_info = {
-                'zlibrary_id': zlibrary_book_data['zlibrary_id'],
-                'title': zlibrary_book_data['title'] or book.title,
-                'authors': zlibrary_book_data['authors'] or book.author,
-                'extension': zlibrary_book_data['extension'],
+                'zlibrary_id': queue_item_data['zlibrary_id'],
+                'title': queue_item_data['title'] or book.title,
+                'authors': queue_item_data['authors'] or book.author,
+                'extension': queue_item_data['extension'],
                 'douban_id': book.douban_id
             }
             

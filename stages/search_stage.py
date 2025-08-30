@@ -7,7 +7,7 @@
 
 from typing import Dict, Any, List
 
-from db.models import BookStatus, DoubanBook, ZLibraryBook
+from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadQueue
 from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
 from core.state_manager import BookStateManager
 from services.zlibrary_service_v2 import ZLibraryServiceV2
@@ -17,16 +17,19 @@ class SearchStage(BaseStage):
     """搜索处理阶段"""
 
     def __init__(self, state_manager: BookStateManager,
-                 zlibrary_service: ZLibraryServiceV2):
+                 zlibrary_service: ZLibraryServiceV2,
+                 min_match_score: float = 0.6):
         """
         初始化搜索阶段
         
         Args:
             state_manager: 状态管理器
             zlibrary_service: Z-Library服务实例
+            min_match_score: 最低匹配分数阈值
         """
         super().__init__("search", state_manager)
         self.zlibrary_service = zlibrary_service
+        self.min_match_score = min_match_score
 
     def can_process(self, book: DoubanBook) -> bool:
         """
@@ -202,7 +205,8 @@ class SearchStage(BaseStage):
                 # session的commit在get_session上下文管理器中自动处理
                 if saved_count > 0:
                     self.logger.info(f"保存了 {saved_count} 个Z-Library搜索结果")
-                    # 搜索完成后不自动添加到下载队列，交由DownloadStage处理
+                    # 搜索完成后，选择最佳匹配并添加到下载队列
+                    self._add_best_match_to_queue(book)
 
             return saved_count
 
@@ -210,4 +214,70 @@ class SearchStage(BaseStage):
             self.logger.error(f"保存搜索结果失败: {str(e)}")
             return 0
 
-    # 删除队列管理功能，专注于搜索
+    def _add_best_match_to_queue(self, book: DoubanBook) -> bool:
+        """
+        选择最佳匹配结果并添加到下载队列
+        
+        Args:
+            book: 书籍对象
+            
+        Returns:
+            bool: 是否成功添加到队列
+        """
+        try:
+            with self.state_manager.get_session() as session:
+                # 检查是否已在下载队列中
+                existing_queue_item = session.query(DownloadQueue).filter(
+                    DownloadQueue.douban_book_id == book.id).first()
+                
+                if existing_queue_item:
+                    self.logger.info(f"书籍已在下载队列中: {book.title}")
+                    return True
+                
+                # 获取所有搜索结果，按匹配分数降序排列
+                zlibrary_books = session.query(ZLibraryBook).filter(
+                    ZLibraryBook.douban_id == book.douban_id,
+                    ZLibraryBook.is_available == True,
+                    ZLibraryBook.match_score >= self.min_match_score
+                ).order_by(ZLibraryBook.match_score.desc()).all()
+                
+                if not zlibrary_books:
+                    self.logger.warning(f"未找到符合最低匹配分数({self.min_match_score})的结果: {book.title}")
+                    return False
+                
+                # 选择最佳匹配（最高分数）
+                best_match = zlibrary_books[0]
+                
+                # 考虑格式优先级进行微调
+                format_priority = {'epub': 3, 'mobi': 2, 'pdf': 1, 'azw3': 2, 'txt': 0}
+                best_candidate = best_match
+                
+                # 如果有多个高分结果（分差小于0.1），选择格式更优的
+                for zlib_book in zlibrary_books[:3]:  # 只考虑前3个结果
+                    if (best_match.match_score - zlib_book.match_score) <= 0.1:
+                        current_format_score = format_priority.get(zlib_book.extension.lower() if zlib_book.extension else '', 0)
+                        best_format_score = format_priority.get(best_candidate.extension.lower() if best_candidate.extension else '', 0)
+                        
+                        if current_format_score > best_format_score:
+                            best_candidate = zlib_book
+                
+                # 创建下载队列项
+                queue_item = DownloadQueue(
+                    douban_book_id=book.id,
+                    zlibrary_book_id=best_candidate.id,
+                    download_url=best_candidate.download_url or best_candidate.url,
+                    priority=int(best_candidate.match_score * 100),  # 将匹配分数转为优先级
+                    status='queued'
+                )
+                
+                session.add(queue_item)
+                # session的commit在get_session上下文管理器中自动处理
+                
+                self.logger.info(f"添加最佳匹配到下载队列: {book.title}, "
+                               f"匹配分数: {best_candidate.match_score:.3f}, "
+                               f"格式: {best_candidate.extension}")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"添加到下载队列失败: {str(e)}")
+            return False
