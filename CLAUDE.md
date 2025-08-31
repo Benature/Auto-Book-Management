@@ -68,7 +68,7 @@ This is a book synchronization automation tool that syncs books from Douban wish
 
 **Services** (`services/`):
 - `DoubanScraper`: 增强的豆瓣爬虫，支持403错误处理
-- `ZLibraryServiceV2`: 重构的Z-Library服务，分离搜索和下载功能
+- `ZLibraryService`: 重构的Z-Library服务，分离搜索和下载功能
 - `CalibreService`: Calibre集成服务  
 - `LarkService`: 飞书通知服务，支持实时状态通知
 

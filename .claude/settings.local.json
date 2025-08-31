@@ -5,7 +5,8 @@
       "Bash(sqlite3:*)",
       "Bash(cp:*)",
       "Bash(PYTHONPATH=. python db/migration.py data/douban-zlib-calibre.db)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

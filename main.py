@@ -3,332 +3,274 @@
 """
 豆瓣 Z-Library 同步工具
 
-主程序入口，整合所有模块并提供命令行接口。
+使用Pipeline架构实现分阶段处理的书籍同步工具。
 """
 
 import os
 import sys
 import argparse
 import time
+import threading
 from pathlib import Path
-import logging
-import shutil
-from typing import Dict, Any, List, Optional, Tuple
-import yaml
-import traceback
+from typing import Dict, Any, List
 from datetime import datetime
+
+# 导入版本信息
+from __version__ import __version__, get_version_info
 
 # 导入项目模块
 from config.config_manager import ConfigManager
 from utils.logger import setup_logger, get_logger
 from db.database import Database
-from db.models import BookStatus, DoubanBook, DownloadRecord, SyncTask
-from datetime import datetime
+from db.models import BookStatus, DoubanBook
+
+# 导入新架构组件
+from core.state_manager import BookStateManager
+from core.pipeline import PipelineManager
+from core.task_scheduler import TaskScheduler, TaskPriority, ScheduledTask
+from core.error_handler import ErrorHandler
+
+# 导入处理阶段
+from stages.data_collection_stage import DataCollectionStage
+from stages.search_stage import SearchStage
+from stages.download_stage import DownloadStage
+from stages.upload_stage import UploadStage
+
+# 导入服务
 from scrapers.douban_scraper import DoubanScraper, DoubanAccessDeniedException
 from services.zlibrary_service import ZLibraryService
 from services.calibre_service import CalibreService
 from services.lark_service import LarkService
-from scheduler.task_scheduler import TaskScheduler
 
 
-class DoubanZLibraryCalibre:
+class DoubanZLibraryCalibrer:
     """豆瓣 Z-Library 同步工具主类"""
 
-    def __init__(self, config_path: str = "config.yaml"):
+    def __init__(self, config_path: str = "config.yaml", debug_mode: bool = False):
         """
         初始化豆瓣 Z-Library 同步工具
         
         Args:
             config_path: 配置文件路径
+            debug_mode: 调试模式，启用单线程pipeline
         """
         # 加载配置
         self.config_manager = ConfigManager(config_path)
-
+        self.debug_mode = debug_mode
+        
         # 设置日志
-        import logging
+        self._setup_logging()
+        self.logger = get_logger("main")
+        self.logger.info(f"初始化豆瓣 Z-Library 同步工具 v{__version__}")
+        
+        # 初始化数据库
+        self._init_database()
+        
+        # 初始化服务
+        self._init_services()
+        
+        # 初始化核心组件
+        self._init_core_components()
+        
+        # 初始化处理阶段
+        self._init_stages()
+        
+        # 为任务调度器注册Pipeline处理器
+        self._register_task_handlers()
+        
+        # 设置错误处理
+        self._setup_error_handling()
+        
+        # 状态跟踪
+        self._running = False
+        self._shutdown_event = threading.Event()
+        
+        self.logger.info("豆瓣 Z-Library 同步工具初始化完成")
+    
+    def _setup_logging(self):
+        """设置日志"""
         from utils.logger import generate_log_path
         log_config = self.config_manager.get_logging_config()
-
-        # 使用新的日志路径格式，除非配置文件中明确指定了路径
+        
         if 'file' in log_config and log_config['file'] != 'logs/app.log':
-            log_file = log_config['file']  # 使用用户指定的路径
+            log_file = log_config['file']
         else:
-            log_file = generate_log_path()  # 使用新的格式
-
+            log_file = generate_log_path()
+        
+        import logging
         log_level = log_config.get('level', 'INFO')
         log_level_value = getattr(logging, log_level.upper(), logging.INFO)
         setup_logger(log_level_value, log_file)
-        self.logger = get_logger("main")
-
-        self.logger.info("初始化豆瓣 Z-Library 同步工具")
-
-        # 初始化数据库
-        db_url = self.config_manager.get_database_url()
-        self.db = Database(db_url)
-
+    
+    def _init_database(self):
+        """初始化数据库"""
+        self.db = Database(self.config_manager)
+        
         # 检查数据库文件是否存在
-        db_path = Path(db_url.replace("sqlite:///", "")).resolve()
-        self.logger.info(f"最终数据库路径为: {db_path}")
+        db_path = Path(self.db.db_url.replace("sqlite:///", "")).resolve()
+        self.logger.info(f"数据库路径: {db_path}")
+        
         if not db_path.exists():
             self.logger.info("数据库文件不存在，正在创建...")
             self.db.init_db()
-
-        # 初始化豆瓣爬虫
+    
+    def _init_core_components(self):
+        """初始化核心组件"""
+        # 状态管理器
+        self.state_manager = BookStateManager(
+            session_factory=self.db.session_factory,
+            lark_service=self.lark_service
+        )
+        
+        # Pipeline管理器
+        max_workers = 1 if self.debug_mode else 4
+        self.pipeline_manager = PipelineManager(
+            self.state_manager,
+            max_workers=max_workers
+        )
+        
+        if self.debug_mode:
+            self.logger.info("调试模式已启用：使用单线程pipeline")
+        
+        # 任务调度器
+        max_concurrent_tasks = 1 if self.debug_mode else 10
+        self.task_scheduler = TaskScheduler(
+            self.state_manager,
+            max_concurrent_tasks=max_concurrent_tasks
+        )
+        
+        if self.debug_mode:
+            self.logger.info(f"调试模式：限制并发任务数为 {max_concurrent_tasks}")
+        
+        
+        # 错误处理器
+        self.error_handler = ErrorHandler(self.state_manager)
+    
+    def _init_services(self):
+        """初始化服务"""
+        # 豆瓣爬虫
         douban_config = self.config_manager.get_douban_config()
         zlib_config = self.config_manager.get_zlibrary_config()
+        
         self.douban_scraper = DoubanScraper(
             cookie=douban_config.get('cookie'),
             user_id=douban_config.get('user_id'),
             max_pages=douban_config.get('max_pages'),
             proxy=zlib_config.get('proxy_list', [None])[0],
             min_delay=douban_config.get('min_delay', 1.0),
-            max_delay=douban_config.get('max_delay', 3.0))
-
-        # 初始化 Z-Library 服务
-        zlib_config = self.config_manager.get_zlibrary_config()
+            max_delay=douban_config.get('max_delay', 3.0)
+        )
+        
+        # Z-Library服务
         self.zlibrary_service = ZLibraryService(
             email=zlib_config.get('username'),
             password=zlib_config.get('password'),
-            format_priority=zlib_config.get('format_priority'),
             proxy_list=zlib_config.get('proxy_list'),
-            download_dir=zlib_config.get('download_dir', 'data/downloads'),
-            min_delay=zlib_config.get('min_delay', 1.0),
-            max_delay=zlib_config.get('max_delay', 3.0))
-
-        # 初始化 Calibre 服务
+            format_priority=zlib_config.get('format_priority'),
+            download_dir=zlib_config.get('download_dir', 'data/downloads')
+        )
+        
+        # Calibre服务
         calibre_config = self.config_manager.get_calibre_config()
         self.calibre_service = CalibreService(
             server_url=calibre_config.get('content_server_url'),
             username=calibre_config.get('username'),
             password=calibre_config.get('password'),
-            match_threshold=calibre_config.get('match_threshold', 0.6))
-
-        # 初始化飞书通知服务
+            match_threshold=calibre_config.get('match_threshold', 0.6)
+        )
+        
+        # 飞书通知服务
         lark_config = self.config_manager.get_lark_config()
-        if lark_config.get('enabled',
-                           False) and lark_config.get('webhook_url'):
+        if lark_config.get('enabled', False) and lark_config.get('webhook_url'):
             self.lark_service = LarkService(
                 webhook_url=lark_config.get('webhook_url', ''),
-                secret=lark_config.get('secret', None))
+                secret=lark_config.get('secret', None)
+            )
         else:
             self.lark_service = None
-
-        # 初始化任务调度器
-        self.scheduler = TaskScheduler()
-
-        # 系统配置
-        self.system_config = self.config_manager.get_system_config()
-
-        self.logger.info("豆瓣 Z-Library 同步工具初始化完成")
-
-    def setup_scheduler(self) -> None:
-        """
-        设置任务调度器
-        """
-        self.logger.info("设置任务调度器")
-
-        # 添加同步任务
-        self.scheduler.add_task(name="douban_sync",
-                                func=self.sync_douban_books,
-                                notify=True)
-
-        # 设置调度计划
-        schedule_config = self.config_manager.get_schedule_config()
-        schedule_type = schedule_config.get('type', 'daily')
-
-        if schedule_type == 'daily':
-            self.scheduler.schedule_task(name="douban_sync",
-                                         schedule_type="daily",
-                                         at=schedule_config.get('at', '02:00'))
-        elif schedule_type == 'weekly':
-            self.scheduler.schedule_task(
-                name="douban_sync",
-                schedule_type="weekly",
-                day=schedule_config.get('day', 0),  # 默认周一
-                at=schedule_config.get('at', '02:00'))
-        elif schedule_type == 'interval':
-            hours = schedule_config.get('hours', 0)
-            minutes = schedule_config.get('minutes', 0)
-
-            if hours > 0:
-                self.scheduler.schedule_task(name="douban_sync",
-                                             schedule_type="interval",
-                                             hours=hours)
-            elif minutes > 0:
-                self.scheduler.schedule_task(name="douban_sync",
-                                             schedule_type="interval",
-                                             minutes=minutes)
-            else:
-                self.logger.warning("无效的间隔设置，使用默认值: 每天 02:00")
-                self.scheduler.schedule_task(name="douban_sync",
-                                             schedule_type="daily",
-                                             at="02:00")
-        else:
-            self.logger.warning(f"无效的调度类型: {schedule_type}，使用默认值: 每天 02:00")
-            self.scheduler.schedule_task(name="douban_sync",
-                                         schedule_type="daily",
-                                         at="02:00")
-
-        # 启动调度器
-        self.scheduler.start()
-        self.logger.info("任务调度器设置完成并启动")
-
-    def process_book(
-            self,
-            book: Dict[str, Any],
-            book_id: int = None) -> Tuple[bool, Optional[str], Optional[str]]:
-        """
-        处理单本书籍：下载并上传到 Calibre
+    
+    def _init_stages(self):
+        """初始化处理阶段"""
+        # 数据收集阶段
+        data_collection_stage = DataCollectionStage(
+            self.state_manager, self.douban_scraper
+        )
+        self.pipeline_manager.register_stage(data_collection_stage)
         
-        Args:
-            book: 书籍信息
-            book_id: 书籍在数据库中的ID（可选）
+        # 搜索阶段
+        zlib_config = self.config_manager.get_zlibrary_config()
+        search_stage = SearchStage(
+            self.state_manager, self.zlibrary_service,
+            min_match_score=zlib_config.get('min_match_score', 0.6)
+        )
+        self.pipeline_manager.register_stage(search_stage)
+        
+        # 下载阶段
+        download_stage = DownloadStage(
+            self.state_manager, self.zlibrary_service,
+            download_dir=zlib_config.get('download_dir', 'data/downloads')
+        )
+        self.pipeline_manager.register_stage(download_stage)
+        
+        # 上传阶段
+        upload_stage = UploadStage(
+            self.state_manager, self.calibre_service
+        )
+        self.pipeline_manager.register_stage(upload_stage)
+    
+    def _register_task_handlers(self):
+        """为任务调度器注册Pipeline处理器"""
+        def create_handler(stage_name: str):
+            """创建阶段处理器包装函数"""
+            def handler(task):
+                """处理器函数，用于TaskScheduler调用"""
+                stage = self.pipeline_manager.stages.get(stage_name)
+                if not stage:
+                    self.logger.error(f"找不到处理阶段: {stage_name}")
+                    return False
+                
+                # 在持久的会话中执行处理
+                with self.state_manager.get_session() as session:
+                    book = session.get(DoubanBook, task.book_id)
+                    if not book:
+                        self.logger.error(f"找不到书籍: {task.book_id}")
+                        return False
+                    
+                    # 执行阶段处理（这将在会话中进行）
+                    success = stage.execute(book)
+                    
+                    # 确保book对象的修改被提交
+                    if success and session.is_modified(book):
+                        # 会话会在上下文管理器结束时自动提交
+                        pass
+                    
+                    return success
+            return handler
+        
+        # 注册各个阶段的处理器
+        for stage_name in ["data_collection", "search", "download", "upload"]:
+            handler = create_handler(stage_name)
+            self.task_scheduler.register_handler(stage_name, handler)
+        
+        self.logger.info("已注册Pipeline处理器到TaskScheduler")
+    
+    def _setup_error_handling(self):
+        """设置错误处理"""
+        # 注册错误回调
+        if self.lark_service:
+            def auth_error_callback(data):
+                """认证错误回调"""
+                self.lark_service.send_403_error_notification(
+                    data['error'],
+                    f"阶段: {data['stage']}"
+                )
             
-        Returns:
-            Tuple[bool, Optional[str], Optional[str]]: (是否成功, 文件路径, 错误信息)
-        """
-        book_title = book.get('title', '未知')
-        book_author = book.get('author', '未知')
-        book_isbn = book.get('isbn', '')
-
-        self.logger.info(f"处理书籍: {book_title} - {book_author}")
-
-        # 检查 Calibre 中是否已存在
-        try:
-            existing_book = self.calibre_service.find_best_match(
-                title=book_title, author=book_author, isbn=book_isbn)
-
-            if existing_book:
-                self.logger.info(f"书籍已存在于 Calibre: {book_title}")
-                if book_id:
-                    self.db.update_book_status_with_history(
-                        book_id,
-                        BookStatus.MATCHED,
-                        change_reason="Found existing book in Calibre")
-                return True, None, None
-        except Exception as e:
-            self.logger.warning(f"Calibre 搜索失败，将继续使用 Z-Library 搜索: {str(e)}")
-            # 继续执行 Z-Library 搜索，不返回错误
-
-        # 从 Z-Library 下载
-        try:
-            # 更新状态为搜索中
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id,
-                    BookStatus.SEARCHING,
-                    change_reason="Starting Z-Library search")
-
-            self.logger.info(f"Z-lib搜索 {book_title} {book_author} {book_isbn}")
-
-            # 获取出版社信息并修正数据错误
-            book_publisher = book.get('publisher', '')
-            book_publish_date = book.get('publish_date', '')
-
-            # 修正数据：如果 publisher 看起来像日期，而 publish_date 看起来像价格或出版社，则交换
-            if book_publisher and book_publish_date:
-                import re
-                # 检查 publisher 是否像日期格式 (YYYY-MM-DD 或 YYYY-MM 或 YYYY)
-                date_pattern = r'^\d{4}(-\d{1,2})?(-\d{1,2})?$'
-                # 检查 publish_date 是否包含货币符号或"元"等价格标识
-                price_pattern = r'(EUR|USD|CNY|￥|元|\.00)'
-
-                if (re.match(date_pattern, book_publisher.strip())
-                        or re.search(price_pattern, book_publish_date)):
-                    # 看起来数据有问题，尝试从原始字符串重新解析
-                    self.logger.warning(
-                        f"检测到数据错误 - 出版社字段为日期格式: '{book_publisher}', 出版日期字段为: '{book_publish_date}'"
-                    )
-                    # 由于历史数据已经错乱，这里直接清空出版社信息，避免搜索时使用错误信息
-                    book_publisher = ''
-                    self.logger.info(f"已清空出版社信息以避免搜索错误")
-
-            # 搜索并下载书籍
-            book_douban_id = book.get('douban_id', '')
-            file_path = self.zlibrary_service.search_and_download(
-                title=book_title,
-                author=book_author,
-                isbn=book_isbn,
-                publisher=book_publisher,
-                douban_id=book_douban_id)
-
-            if not file_path:
-                error_msg = f"从 Z-Library 下载失败: 未找到资源或下载失败"
-                self.logger.error(error_msg)
-                if book_id:
-                    self.db.update_book_status_with_history(
-                        book_id,
-                        BookStatus.SEARCH_NOT_FOUND,
-                        change_reason="Z-Library search or download failed",
-                        error_message=error_msg)
-                return False, None, error_msg
-
-            # 更新状态为下载中
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id,
-                    BookStatus.DOWNLOADING,
-                    change_reason="Starting file download from Z-Library")
-
-            self.logger.info(f"从 Z-Library 下载成功: {file_path}")
-
-            # 更新状态为已下载
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id,
-                    BookStatus.DOWNLOADED,
-                    change_reason="Successfully downloaded from Z-Library")
-
-            # 更新状态为上传中
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id,
-                    BookStatus.UPLOADING,
-                    change_reason="Starting upload to Calibre")
-
-            # 上传到 Calibre
-            book_id_calibre = self.calibre_service.upload_book(
-                file_path=file_path,
-                metadata={
-                    'title': book_title,
-                    'author': book_author,
-                    'isbn': book_isbn
-                })
-
-            if book_id_calibre:
-                self.logger.info(
-                    f"上传到 Calibre 成功: {book_title}, ID: {book_id_calibre}")
-                if book_id:
-                    self.db.update_book_status_with_history(
-                        book_id,
-                        BookStatus.UPLOADED,
-                        change_reason="Successfully uploaded to Calibre")
-            else:
-                self.logger.warning(f"上传到 Calibre 失败: {book_title}")
-                if book_id:
-                    self.db.update_book_status_with_history(
-                        book_id,
-                        BookStatus.DOWNLOADED,  # 保持已下载状态
-                        change_reason="Failed to upload to Calibre",
-                        error_message="Calibre upload failed")
-
-            return True, file_path, None
-
-        except Exception as e:
-            error_msg = f"处理书籍失败: {str(e)}"
-            self.logger.error(error_msg)
-            traceback.print_exc()
-            if book_id:
-                self.db.update_book_status_with_history(
-                    book_id,
-                    BookStatus.SEARCH_NOT_FOUND,
-                    change_reason="Exception during book processing",
-                    error_message=error_msg)
-            return False, None, error_msg
-
+            self.error_handler.register_error_callback('auth_forbidden', auth_error_callback)
+            self.error_handler.register_error_callback('auth_login', auth_error_callback)
+    
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
         """
-        同步豆瓣想读书单到 Z-Library 和 Calibre
+        同步豆瓣想读书单
         
         Args:
             notify: 是否发送通知
@@ -337,41 +279,75 @@ class DoubanZLibraryCalibre:
             Dict[str, Any]: 同步结果
         """
         self.logger.info("开始同步豆瓣想读书单")
-
-        # DEV:
-        # books = []
-        # 获取豆瓣想读书单
+        
         try:
+            # 获取豆瓣想读书单
             books = self.douban_scraper.get_wish_list()
+            
+            if not books:
+                self.logger.warning("未获取到豆瓣想读书单")
+                return {
+                    'success': False,
+                    'total': 0,
+                    'message': '未获取到豆瓣想读书单'
+                }
+            
+            # 添加新书籍到数据库
+            new_books_count = self._add_new_books_to_database(books)
+            
+            # 为新书籍调度Pipeline任务
+            scheduled_count = self._schedule_pipeline_tasks()
+            
+            self.logger.info(
+                f"同步完成: 新增 {new_books_count} 本书，调度 {scheduled_count} 个Pipeline任务"
+            )
+            
+            # 发送通知
+            if notify and self.lark_service:
+                self.lark_service.send_sync_summary(
+                    total=len(books),
+                    success=new_books_count,
+                    failed=0,
+                    details=[]
+                )
+            
+            return {
+                'success': True,
+                'total': len(books),
+                'new_books': new_books_count,
+                'scheduled_tasks': scheduled_count
+            }
+            
         except DoubanAccessDeniedException as e:
             self.logger.error(f"豆瓣访问被拒绝: {e.message}")
-            # 发送飞书通知
             if self.lark_service:
-                try:
-                    self.lark_service.send_403_error_notification(e.message, "豆瓣想读书单页面")
-                except Exception as notify_error:
-                    self.logger.error(f"发送飞书通知失败: {notify_error}")
-            # 程序终止
-            self.logger.critical("由于豆瓣403错误，程序终止运行")
-            sys.exit(1)
-        
-        if not books:
-            self.logger.warning("未获取到豆瓣想读书单")
-            return
-
-        # 创建同步任务
-        sync_task_id = self.db.create_sync_task()
-
-        # 检查并添加新书籍到数据库
+                self.lark_service.send_403_error_notification(e.message, "豆瓣想读书单页面")
+            
+            return {
+                'success': False,
+                'error': '豆瓣访问被拒绝',
+                'message': str(e)
+            }
+        except Exception as e:
+            self.logger.error(f"同步豆瓣书单失败: {str(e)}")
+            return {
+                'success': False,
+                'error': '同步失败',
+                'message': str(e)
+            }
+    
+    def _add_new_books_to_database(self, books) -> int:
+        """添加新书籍到数据库"""
         new_books_count = 0
-        existing_books_count = 0
+        
         with self.db.session_scope() as session:
             for book in books:
-                # 通过豆瓣URL或豆瓣ID查找已存在的书籍
+                # 检查是否已存在
                 existing_book = session.query(DoubanBook).filter(
-                    (DoubanBook.douban_url == book['douban_url'])
-                    | (DoubanBook.douban_id == book['douban_id'])).first()
-
+                    (DoubanBook.douban_url == book['douban_url']) |
+                    (DoubanBook.douban_id == book['douban_id'])
+                ).first()
+                
                 if not existing_book:
                     new_book = DoubanBook(
                         title=book['title'],
@@ -382,275 +358,227 @@ class DoubanZLibraryCalibre:
                         cover_url=book.get('cover_url'),
                         publisher=book.get('publisher'),
                         publish_date=book.get('publish_date'),
-                        status=BookStatus.NEW)
+                        status=BookStatus.NEW
+                    )
                     session.add(new_book)
                     new_books_count += 1
                     self.logger.info(f"添加新书: {book['title']}")
-                else:
-                    existing_books_count += 1
-                    self.logger.info(f"书籍已存在: {book['title']}")
-
-            self.logger.info(
-                f"本次同步: 新增 {new_books_count} 本书，已存在 {existing_books_count} 本书")
-
-        # 获取状态为 NEW 的书籍的详细信息
+        
+        return new_books_count
+    
+    def _schedule_pipeline_tasks(self) -> int:
+        """调度Pipeline任务"""
+        scheduled_count = 0
+        
+        # 先获取书籍IDs，避免会话绑定问题
+        book_ids = []
         with self.db.session_scope() as session:
-            new_books = session.query(DoubanBook).filter(
-                DoubanBook.status == BookStatus.NEW).all()
-            self.logger.info(f"发现 {len(new_books)} 本新书，开始获取详细信息")
-            for book in new_books:
-                try:
-                    book_detail = self.douban_scraper.get_book_detail(
-                        book.douban_url)
-                    if book_detail:
-                        book.isbn = book_detail.get('isbn', book.isbn)
-                        book.original_title = book_detail.get('original_title')
-                        book.subtitle = book_detail.get('subtitle')
-                        book.summary = book_detail.get('summary')
-                        # 直接更新状态，这里在同一个session中
-                        book.status = BookStatus.WITH_DETAIL
-                        # 创建历史记录
-                        from db.models import BookStatusHistory
-                        history = BookStatusHistory(
-                            book_id=book.id,
-                            old_status=BookStatus.NEW,
-                            new_status=BookStatus.WITH_DETAIL,
-                            change_reason=
-                            "Retrieved detailed information from Douban")
-                        session.add(history)
-                        self.logger.info(f"获取书籍详细信息成功: {book.title}")
-                except DoubanAccessDeniedException as e:
-                    self.logger.error(f"获取书籍详细信息时豆瓣访问被拒绝: {e.message}")
-                    # 发送飞书通知
-                    if self.lark_service:
-                        try:
-                            self.lark_service.send_403_error_notification(e.message, book.douban_url)
-                        except Exception as notify_error:
-                            self.logger.error(f"发送飞书通知失败: {notify_error}")
-                    # 程序终止
-                    self.logger.critical("由于豆瓣403错误，程序终止运行")
-                    sys.exit(1)
-                break  # DEV:
-
-            # 获取状态为 WITH_DETAIL 的书籍的ID列表
-            book_ids_to_search = [
-                book.id for book in session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.WITH_DETAIL).all()
-            ]
-
-        # DEV:
-        if not books:
-            self.logger.warning("未获取到豆瓣想读书单，同步任务终止")
-            self.db.update_sync_task(
-                sync_task_id, {
-                    'status': 'failed',
-                    'total_books': 0,
-                    'success_count': 0,
-                    'failed_count': 0,
-                    'error_message': '未获取到豆瓣想读书单'
-                })
-            return {
-                'success': False,
-                'total': 0,
-                'success_count': 0,
-                'failed_count': 0,
-                'details': []
-            }
-
-        # 更新同步任务信息
-        self.db.update_sync_task(sync_task_id, {
-            'status': 'running',
-            'total_books': len(book_ids_to_search)
-        })
-
-        # 处理每本书
-        success_count = 0
-        failed_count = 0
-        details = []
-
-        for book_id in book_ids_to_search:
-            with self.db.session_scope() as session:
-                # 重新获取书籍对象
-                book = session.get(DoubanBook, book_id)
-                if not book:
-                    continue
-
-                # 获取书籍信息
-                book_isbn = book.isbn
-                book_title = book.title
-                book_author = book.author
-
-                # 如果书籍已下载成功，跳过
-                if book.status == BookStatus.DOWNLOADED:
-                    self.logger.info(f"书籍已存在且已下载: {book_title}")
-                    success_count += 1
-                    details.append({
-                        'title': book_title,
-                        'author': book_author,
-                        'isbn': book_isbn,
-                        'status': 'skipped',
-                        'message': '书籍已存在且已下载'
-                    })
-                    continue
-
-                # 获取书籍信息用于处理
-                book_data = {
-                    'title': book_title,
-                    'author': book_author,
-                    'isbn': book_isbn,
-                    'douban_id': book.douban_id,
-                    'douban_url': book.douban_url,
-                    'cover_url': book.cover_url,
-                    'publisher': book.publisher,
-                    'publish_date': book.publish_date
-                }
-
-            # 在session外部处理书籍
-            success, file_path, error_msg = self.process_book(
-                book_data, book_id)
-
-            # 重新开启session来处理结果
-            with self.db.session_scope() as session:
-                # 重新获取书籍对象
-                book = session.get(DoubanBook, book_id)
-                if not book:
-                    continue
-
-                # 更新书籍状态
-                if success:
-                    # 状态已在 process_book 中更新，这里只更新其他字段
-                    book.last_check = datetime.now()
-
-                    if file_path:
-                        # 创建下载记录
-                        download_record = DownloadRecord(
-                            book_id=book.id,
-                            file_path=file_path,
-                            file_format=Path(file_path).suffix[1:]
-                            if file_path else '',
-                            source='zlibrary',
-                            sync_task_id=sync_task_id)
-                        session.add(download_record)
-
-                    success_count += 1
-                    details.append({
-                        'title': book_title,
-                        'author': book_author,
-                        'isbn': book_isbn,
-                        'status': 'success',
-                        'file_path': file_path
-                    })
-
-                    # 发送通知
-                    if notify and self.lark_service:
-                        self.lark_service.send_book_notification(
-                            book_info={
-                                'title': book_title,
-                                'author': book_author,
-                                'isbn': book_isbn
-                            },
-                            download_status=True)
-                else:
-                    # 状态已在 process_book 中更新为失败状态
-                    book.last_check = datetime.now()
-                    if error_msg:
-                        book.error_message = error_msg
-
-                    failed_count += 1
-                    details.append({
-                        'title': book_title,
-                        'author': book_author,
-                        'isbn': book_isbn,
-                        'status': 'failed',
-                        'message': error_msg
-                    })
-
-                    # 发送通知
-                    if notify and self.lark_service:
-                        self.lark_service.send_book_notification(
-                            book_info={
-                                'title': book_title,
-                                'author': book_author,
-                                'isbn': book_isbn
-                            },
-                            download_status=False,
-                            error_message=error_msg)
-
-        # 更新同步任务信息
-        self.db.update_sync_task(
-            sync_task_id, {
-                'status': 'completed',
-                'success_count': success_count,
-                'failed_count': failed_count,
-                'completed_at': datetime.now()
-            })
-
-        # 发送同步摘要通知
-        if notify and self.lark_service:
-            self.lark_service.send_sync_summary(total=len(book_ids_to_search),
-                                                success=success_count,
-                                                failed=failed_count,
-                                                details=details)
-
-        self.logger.info(
-            f"同步完成: 总计 {len(book_ids_to_search)} 本，成功 {success_count} 本，失败 {failed_count} 本"
-        )
-
-        return {
-            'success': True,
-            'total': len(book_ids_to_search),
-            'success_count': success_count,
-            'failed_count': failed_count,
-            'details': details
-        }
-
-    def run_daemon(self) -> None:
-        """
-        以守护进程模式运行
-        """
+            # 获取状态为NEW的书籍ID
+            new_books = session.query(DoubanBook.id).filter(
+                DoubanBook.status == BookStatus.NEW
+            ).all()
+            book_ids = [book_id[0] for book_id in new_books]
+        
+        # 在会话外调度任务
+        for book_id in book_ids:
+            # 为每本书调度完整的Pipeline
+            self.task_scheduler.schedule_book_pipeline(
+                book_id=book_id,
+                start_stage="data_collection"
+            )
+            scheduled_count += 1
+        
+        return scheduled_count
+    
+    def start_pipeline(self):
+        """启动Pipeline处理"""
+        if self._running:
+            self.logger.warning("Pipeline已在运行中")
+            return
+        
+        self.logger.info("启动Pipeline处理系统")
+        self._running = True
+        self._shutdown_event.clear()
+        
+        # 启动任务调度器（使用TaskScheduler统一管理任务）
+        self.task_scheduler.start()
+        
+        # 不启动Pipeline管理器，避免与TaskScheduler冲突
+        # self.pipeline_manager.start()
+        
+        self.logger.info("Pipeline处理系统已启动")
+    
+    def stop_pipeline(self):
+        """停止Pipeline处理"""
+        if not self._running:
+            return
+        
+        self.logger.info("正在停止Pipeline处理系统...")
+        self._running = False
+        self._shutdown_event.set()
+        
+        # 停止任务调度器
+        self.task_scheduler.stop()
+        
+        # Pipeline管理器没有启动，无需停止
+        # self.pipeline_manager.stop()
+        
+        self.logger.info("Pipeline处理系统已停止")
+    
+    def run_once(self) -> Dict[str, Any]:
+        """执行一次同步"""
+        self.logger.info("执行一次同步任务")
+        
+        # 同步豆瓣书单
+        sync_result = self.sync_douban_books(notify=True)
+        
+        # 如果豆瓣403错误，则跳过豆瓣同步，但继续处理现有书籍
+        if not sync_result['success'] and sync_result.get('error') != '豆瓣访问被拒绝':
+            return sync_result
+        
+        # 如果是豆瓣403错误，记录信息但继续处理
+        if not sync_result['success'] and sync_result.get('error') == '豆瓣访问被拒绝':
+            self.logger.warning("豆瓣403错误，跳过豆瓣同步，继续处理现有书籍进行Z-Library搜索")
+        
+        # 检查数据库中是否有待处理的书籍
+        pending_books = self._get_pending_books_for_processing()
+        if not pending_books:
+            self.logger.info("没有待处理的书籍")
+            return sync_result
+        
+        # 在debug模式下限制处理的书籍数量
+        if self.debug_mode and len(pending_books) > 3:
+            pending_books = pending_books[:3]
+            self.logger.info(f"调试模式：限制处理书籍数量为 {len(pending_books)} 本")
+        
+        self.logger.info(f"发现 {len(pending_books)} 本待处理书籍，开始Pipeline处理")
+        
+        # 为待处理的书籍调度任务
+        self._schedule_pipeline_tasks_for_books(pending_books)
+        
+        # 启动Pipeline处理
+        self.start_pipeline()
+        
+        # 等待Pipeline处理完成
+        self._wait_for_pipeline_completion()
+        
+        # 停止Pipeline
+        self.stop_pipeline()
+        
+        return sync_result
+    
+    def run_daemon(self):
+        """以守护进程模式运行"""
         self.logger.info("以守护进程模式启动")
-
-        # 设置任务调度器
-        self.setup_scheduler()
-
+        
+        # 启动Pipeline系统
+        self.start_pipeline()
+        
         try:
-            # 保持程序运行
-            while True:
-                time.sleep(1)
+            # 定期执行同步任务
+            self._daemon_loop()
         except KeyboardInterrupt:
             self.logger.info("接收到终止信号，正在停止服务...")
-            self.scheduler.stop()
-            self.logger.info("服务已停止")
         except Exception as e:
-            self.logger.error(f"运行异常: {str(e)}")
-            traceback.print_exc()
-            self.scheduler.stop()
-
-    def run_once(self) -> Dict[str, Any]:
-        """
-        执行一次同步
+            self.logger.error(f"守护进程异常: {str(e)}")
+        finally:
+            self.stop_pipeline()
+            self.logger.info("服务已停止")
+    
+    def _daemon_loop(self):
+        """守护进程主循环"""
+        # 获取调度配置
+        schedule_config = self.config_manager.get_schedule_config()
+        interval_hours = 24  # 默认每24小时执行一次
         
-        Returns:
-            Dict[str, Any]: 同步结果
-        """
-        self.logger.info("执行一次同步任务")
-        return self.sync_douban_books(notify=True)
-
-    def cleanup(self) -> None:
-        """
-        清理临时文件
-        """
+        if schedule_config.get('type') == 'interval':
+            interval_hours = schedule_config.get('hours', 24)
+        
+        last_sync_time = datetime.now()
+        
+        while not self._shutdown_event.is_set():
+            try:
+                current_time = datetime.now()
+                
+                # 检查是否需要同步
+                if (current_time - last_sync_time).total_seconds() >= interval_hours * 3600:
+                    self.logger.info("开始定时同步")
+                    sync_result = self.sync_douban_books(notify=True)
+                    
+                    if sync_result['success']:
+                        last_sync_time = current_time
+                    
+                # 休眠1分钟后再检查
+                if self._shutdown_event.wait(60):
+                    break
+                    
+            except Exception as e:
+                self.logger.error(f"守护进程循环异常: {str(e)}")
+                time.sleep(60)
+    
+    def _wait_for_pipeline_completion(self, max_wait_minutes: int = 60):
+        """等待Pipeline处理完成"""
+        self.logger.info(f"等待Pipeline处理完成 (最大等待 {max_wait_minutes} 分钟)")
+        
+        start_time = datetime.now()
+        
+        while not self._shutdown_event.is_set():
+            # 检查是否有活跃任务
+            # 使用状态管理器获取书籍统计，因为pipeline_manager没有运行
+            pipeline_status = {
+                'running': False,
+                'active_tasks': 0,
+                'max_workers': 4,
+                'registered_stages': ['data_collection', 'search', 'download', 'upload'],
+                'book_statistics': self.state_manager.get_status_statistics()
+            }
+            scheduler_status = self.task_scheduler.get_status()
+            
+            active_tasks = (
+                pipeline_status['active_tasks'] + 
+                scheduler_status['active_tasks'] +
+                scheduler_status['queue_size']
+            )
+            
+            if active_tasks == 0:
+                self.logger.info("Pipeline处理完成")
+                break
+            
+            # 检查是否超时
+            elapsed = datetime.now() - start_time
+            if elapsed.total_seconds() > max_wait_minutes * 60:
+                self.logger.warning(f"Pipeline处理超时，仍有 {active_tasks} 个活跃任务")
+                break
+            
+            # 每30秒报告一次状态
+            self.logger.info(f"Pipeline处理中，活跃任务: {active_tasks}")
+            if self._shutdown_event.wait(30):
+                break
+    
+    def get_status(self) -> Dict[str, Any]:
+        """获取系统状态"""
+        with self.db.session_scope() as session:
+            status = {
+                'running': self._running,
+                'pipeline': pipeline_status,
+                'scheduler': self.task_scheduler.get_status() if hasattr(self, 'task_scheduler') else {},
+                'book_statistics': self.state_manager.get_status_statistics() if hasattr(self, 'state_manager') else {},
+                'error_statistics': self.error_handler.get_error_statistics() if hasattr(self, 'error_handler') else {}
+            }
+        
+        return status
+    
+    def cleanup(self):
+        """清理临时文件"""
         self.logger.info("清理临时文件")
-
-        temp_dir = self.system_config.get('temp_dir', 'data/temp')
+        
+        system_config = self.config_manager.get_system_config()
+        temp_dir = system_config.get('temp_dir', 'data/temp')
+        
         if os.path.exists(temp_dir):
             try:
-                for item in os.listdir(temp_dir):
-                    item_path = os.path.join(temp_dir, item)
-                    if os.path.isfile(item_path):
-                        os.remove(item_path)
-                    elif os.path.isdir(item_path):
-                        shutil.rmtree(item_path)
+                import shutil
+                shutil.rmtree(temp_dir)
                 self.logger.info(f"临时目录已清理: {temp_dir}")
             except Exception as e:
                 self.logger.error(f"清理临时文件失败: {str(e)}")
@@ -658,48 +586,165 @@ class DoubanZLibraryCalibre:
             self.logger.info(f"临时目录不存在: {temp_dir}")
 
 
+    def _get_pending_books_for_processing(self) -> List[Dict[str, Any]]:
+        """
+        获取待处理的书籍列表
+        优先处理可以直接进行下一阶段的书籍
+        
+        Returns:
+            List[Dict[str, Any]]: 待处理的书籍信息列表 (包含id和status)
+        """
+        with self.db.session_scope() as session:
+            # 获取各个阶段可以处理的书籍
+            pending_books = []
+            
+            # 1. NEW状态的书籍 -> data_collection阶段
+            new_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.NEW
+            ).all()
+            for book_id, status, title in new_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 2. DETAIL_COMPLETE状态的书籍 -> search阶段
+            detail_complete_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.DETAIL_COMPLETE
+            ).all()
+            for book_id, status, title in detail_complete_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 3. SEARCH_QUEUED状态的书籍 -> search阶段
+            search_queued_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.SEARCH_QUEUED
+            ).all()
+            for book_id, status, title in search_queued_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 4. SEARCH_COMPLETE状态的书籍 -> download阶段
+            search_complete_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.SEARCH_COMPLETE
+            ).all()
+            for book_id, status, title in search_complete_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 5. DOWNLOAD_QUEUED状态的书籍 -> download阶段
+            download_queued_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.DOWNLOAD_QUEUED
+            ).all()
+            for book_id, status, title in download_queued_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 6. DOWNLOAD_COMPLETE状态的书籍 -> upload阶段
+            download_complete_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.DOWNLOAD_COMPLETE
+            ).all()
+            for book_id, status, title in download_complete_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            # 7. UPLOAD_QUEUED状态的书籍 -> upload阶段
+            upload_queued_books = session.query(DoubanBook.id, DoubanBook.status, DoubanBook.title).filter(
+                DoubanBook.status == BookStatus.UPLOAD_QUEUED
+            ).all()
+            for book_id, status, title in upload_queued_books:
+                pending_books.append({'id': book_id, 'status': status, 'title': title})
+            
+            return pending_books
+    
+    def _schedule_pipeline_tasks_for_books(self, books: List[Dict[str, Any]]) -> int:
+        """
+        为书籍列表调度Pipeline任务
+        
+        Args:
+            books: 书籍信息列表 (包含id和status)
+            
+        Returns:
+            int: 调度的任务数量
+        """
+        scheduled_count = 0
+        
+        for book_info in books:
+            book_id = book_info['id']
+            status = book_info['status']
+            title = book_info.get('title', f'书籍ID{book_id}')
+            
+            # 根据书籍状态确定起始阶段
+            if status == BookStatus.NEW:
+                stages = ['data_collection', 'search', 'download', 'upload']
+            elif status == BookStatus.DETAIL_COMPLETE:
+                stages = ['search', 'download', 'upload']
+            elif status == BookStatus.SEARCH_QUEUED:
+                stages = ['search', 'download', 'upload']
+            elif status == BookStatus.SEARCH_COMPLETE:
+                stages = ['download', 'upload']
+            elif status == BookStatus.DOWNLOAD_QUEUED:
+                stages = ['download', 'upload']
+            elif status == BookStatus.DOWNLOAD_COMPLETE:
+                stages = ['upload']
+            elif status == BookStatus.UPLOAD_QUEUED:
+                stages = ['upload']
+            else:
+                continue  # 跳过不需要处理的状态
+            
+            # 为每个阶段调度任务
+            for stage in stages:
+                task_id = self.task_scheduler.schedule_task(
+                    book_id=book_id,
+                    stage=stage,
+                    priority=TaskPriority.NORMAL
+                )
+                self.logger.debug(f"调度任务: 书籍ID {book_id}, 阶段 {stage}, 任务ID {task_id}")
+                scheduled_count += 1
+                
+        self.logger.info(f"为 {len(books)} 本书调度了 {scheduled_count} 个Pipeline任务")
+        return scheduled_count
+
+
 def main():
-    """
-    主函数
-    """
-    # 解析命令行参数
+    """主函数"""
     parser = argparse.ArgumentParser(description="豆瓣 Z-Library 同步工具")
     parser.add_argument("-c", "--config", default="config.yaml", help="配置文件路径")
-    parser.add_argument("-d",
-                        "--daemon",
-                        action="store_true",
-                        help="以守护进程模式运行")
-    parser.add_argument("-o",
-                        "--once",
-                        action="store_true",
-                        default=True,
-                        help="执行一次同步后退出")
+    parser.add_argument("-d", "--daemon", action="store_true", help="以守护进程模式运行")
+    parser.add_argument("-o", "--once", action="store_true", default=True, help="执行一次同步后退出")
     parser.add_argument("--cleanup", action="store_true", help="清理临时文件")
-
+    parser.add_argument("--status", action="store_true", help="显示系统状态")
+    parser.add_argument("--debug", action="store_true", help="调试模式：单线程运行pipeline")
+    parser.add_argument("-v", "--version", action="version", version=f"豆瓣 Z-Library 同步工具 v{__version__}")
+    
     args = parser.parse_args()
-
-    # 检查配置文件是否存在
+    
+    # 检查配置文件
     if not os.path.exists(args.config):
         print(f"错误: 配置文件不存在: {args.config}")
         print(f"请复制 config.yaml.example 为 {args.config} 并进行配置")
         return 1
-
+    
     # 创建应用实例
-    app = DoubanZLibraryCalibre(args.config)
-
-    # 根据命令行参数执行相应操作
-    if args.cleanup:
-        app.cleanup()
-
-    if args.once:
-        app.run_once()
-    elif args.daemon:
-        app.run_daemon()
-    else:
-        # 默认执行一次同步
-        app.run_once()
-
-    return 0
+    try:
+        app = DoubanZLibraryCalibrer(args.config, debug_mode=args.debug)
+        
+        # 执行相应操作
+        if args.cleanup:
+            app.cleanup()
+            return 0
+        
+        if args.status:
+            status = app.get_status()
+            import json
+            print(json.dumps(status, indent=2, ensure_ascii=False, default=str))
+            return 0
+        
+        if args.daemon:
+            app.run_daemon()
+        elif args.once:
+            result = app.run_once()
+            if not result['success']:
+                print(f"同步失败: {result.get('message', 'Unknown error')}")
+                return 1
+        
+        return 0
+        
+    except Exception as e:
+        print(f"应用启动失败: {str(e)}")
+        return 1
 
 
 if __name__ == "__main__":

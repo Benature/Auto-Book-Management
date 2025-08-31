@@ -10,14 +10,14 @@ from typing import Dict, Any, List
 from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadQueue
 from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
 from core.state_manager import BookStateManager
-from services.zlibrary_service_v2 import ZLibraryServiceV2
+from services.zlibrary_service import ZLibraryService
 
 
 class SearchStage(BaseStage):
     """搜索处理阶段"""
 
     def __init__(self, state_manager: BookStateManager,
-                 zlibrary_service: ZLibraryServiceV2,
+                 zlibrary_service: ZLibraryService,
                  min_match_score: float = 0.6):
         """
         初始化搜索阶段

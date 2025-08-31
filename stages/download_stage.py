@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadRecord, DownloadQueue
 from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
 from core.state_manager import BookStateManager
-from services.zlibrary_service_v2 import ZLibraryServiceV2
+from services.zlibrary_service import ZLibraryService
 
 
 class DownloadStage(BaseStage):
@@ -22,7 +22,7 @@ class DownloadStage(BaseStage):
     def __init__(
         self, 
         state_manager: BookStateManager, 
-        zlibrary_service: ZLibraryServiceV2,
+        zlibrary_service: ZLibraryService,
         download_dir: str = "data/downloads"
     ):
         """
@@ -30,7 +30,7 @@ class DownloadStage(BaseStage):
         
         Args:
             state_manager: 状态管理器
-            zlibrary_service: Z-Library V2服务实例
+            zlibrary_service: Z-Library服务实例
             download_dir: 下载目录
         """
         super().__init__("download", state_manager)
@@ -248,7 +248,7 @@ class DownloadStage(BaseStage):
                 'douban_id': book.douban_id
             }
             
-            # 使用ZLibraryServiceV2下载
+            # 使用ZLibraryService下载
             file_path = self.zlibrary_service.download_book(book_info, str(self.download_dir))
             
             return file_path

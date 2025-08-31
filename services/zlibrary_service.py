@@ -2,78 +2,68 @@
 """
 Z-Library 服务
 
-负责与 Z-Library 交互，搜索和下载书籍。
+分离搜索和下载功能，提供更好的错误处理。
 """
 
 import nest_asyncio
 
-nest_asyncio.apply()  # 让 jupyter 正常运行非 jupyter 环境的异步代码
+nest_asyncio.apply()
 
 import os
 import time
 import random
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import logging
+from typing import List, Dict, Any, Optional
 from datetime import datetime
-import shutil
 import asyncio
+import traceback
+import requests
 
 import zlibrary
+import difflib
+import re
 
 from utils.logger import get_logger
-from db.models import ZLibraryBook
-from sqlalchemy.orm import Session
+from core.pipeline import ProcessingError, NetworkError, ResourceNotFoundError
 
 
-class ZLibraryService:
-    """Z-Library 服务类"""
+class ZLibrarySearchService:
+    """Z-Library搜索服务 - 专门负责搜索功能"""
 
     def __init__(self,
                  email: str,
                  password: str,
-                 format_priority: List[str],
-                 proxy_list: List[str],
-                 download_dir: str,
-                 db_session: Session = None,
-                 max_retries: int = 3,
+                 proxy_list: List[str] = None,
                  min_delay: float = 1.0,
                  max_delay: float = 3.0):
         """
-        初始化 Z-Library 服务
+        初始化搜索服务
         
         Args:
             email: Z-Library 账号
             password: 密码
-            format_priority: 下载格式优先级列表
             proxy_list: 代理列表
-            download_dir: 下载目录
-            db_session: 数据库会话
-            max_retries: 最大重试次数
             min_delay: 最小延迟时间（秒）
             max_delay: 最大延迟时间（秒）
         """
-        self.logger = get_logger("zlibrary_service")
+        self.logger = get_logger("zlibrary_search")
         self.__email = email
         self.__password = password
+        self.proxy_list = proxy_list or []
         self.min_delay = min_delay
         self.max_delay = max_delay
-        self.consecutive_errors = 0  # 连续错误计数
-        self.request_count = 0  # 请求计数
-        self.format_priority = format_priority
-        self.proxy_list = proxy_list
-        self.download_dir = Path(download_dir)
-        self.max_retries = max_retries
-        self.db_session = db_session
-        # 初始化客户端
+
+        # 错误计数和请求计数
+        self.consecutive_errors = 0
+        self.request_count = 0
+
+        # 客户端实例
         self.lib = None
-        self._init_client()
 
-        # 确保下载目录存在
-        os.makedirs(self.download_dir, exist_ok=True)
+        self.ensure_connected()
 
-        # 定义搜索策略列表（按优先级排序）
+        # 搜索策略
         self.search_strategies = [{
             'name':
             'ISBN搜索',
@@ -105,74 +95,329 @@ class ZLibraryService:
         }]
 
     def ensure_connected(self) -> bool:
-        """
-        确保Z-Library客户端已连接
-        
-        Returns:
-            bool: 连接状态
-        """
+        """确保客户端已连接"""
         try:
             if self.lib is None:
-                self._init_client()
+                self.logger.info('开始登陆Zlibrary')
+                self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
+                asyncio.run(self.lib.login(self.__email, self.__password))
             return True
         except Exception as e:
             self.logger.error(f"Z-Library连接失败: {str(e)}")
-            return False
+            self.consecutive_errors += 1
+            raise NetworkError(f"Z-Library连接失败: {str(e)}")
 
-    def _init_client(self):
+    def search_books(self,
+                     title: str = None,
+                     author: str = None,
+                     isbn: str = None,
+                     publisher: str = None) -> List[Dict[str, Any]]:
         """
-        初始化Z-Library客户端
-        """
-        self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
-        asyncio.run(self.lib.login(self.__email, self.__password))
-
-    def _smart_delay(self,
-                     base_min: float = None,
-                     base_max: float = None,
-                     request_type: str = "normal") -> None:
-        """
-        智能延迟，根据请求类型、错误次数和请求频率动态调整延迟
+        搜索书籍
         
         Args:
-            base_min: 基础最小延迟时间
-            base_max: 基础最大延迟时间  
-            request_type: 请求类型 ("search", "download", "normal", "error")
+            title: 书名
+            author: 作者
+            isbn: ISBN
+            publisher: 出版社
+            
+        Returns:
+            List[Dict[str, Any]]: 搜索结果列表
         """
-        # 使用传入的延迟时间或默认值
-        min_delay = base_min or self.min_delay
-        max_delay = base_max or self.max_delay
-
-        # 根据请求类型调整延迟
-        if request_type == "search":
-            # 搜索请求需要适中延迟
-            min_delay = max(min_delay * 1.5, 2.0)
-            max_delay = max(max_delay * 1.5, 4.0)
-        elif request_type == "download":
-            # 下载请求需要更长延迟
-            min_delay = max(min_delay * 2, 3.0)
-            max_delay = max(max_delay * 2, 6.0)
-
-        # 根据连续错误增加延迟
-        if self.consecutive_errors > 0:
-            error_multiplier = min(1.5**self.consecutive_errors, 4.0)  # 最多4倍延迟
-            min_delay *= error_multiplier
-            max_delay *= error_multiplier
-            self.logger.warning(
-                f"Z-Library连续错误 {self.consecutive_errors} 次，增加延迟至 {min_delay:.1f}-{max_delay:.1f}秒"
-            )
-
-        # 根据请求频率适当增加延迟（每5个请求后稍微增加延迟）
-        if self.request_count > 0 and self.request_count % 5 == 0:
-            frequency_multiplier = 1.3
-            min_delay *= frequency_multiplier
-            max_delay *= frequency_multiplier
-
-        # 生成随机延迟并执行
-        delay = random.uniform(min_delay, max_delay)
-        self.logger.debug(
-            f"Z-Library延迟 {delay:.2f} 秒 (类型: {request_type}, 错误: {self.consecutive_errors}, 请求: {self.request_count})"
+        self.logger.info(
+            f"开始渐进式搜索: 书名='{title}', 作者='{author}', ISBN='{isbn}', 出版社='{publisher}'"
         )
-        time.sleep(delay)
+
+        # 获取适用的搜索策略
+        applicable_strategies = self._get_applicable_strategies(
+            title, author, isbn, publisher)
+
+        if not applicable_strategies:
+            raise ProcessingError("搜索参数不足，没有适用的搜索策略")
+
+        # 按优先级执行搜索
+        last_network_error = None
+
+        for strategy in applicable_strategies:
+            try:
+                results = self._execute_search_strategy(strategy)
+                if results:
+                    self.consecutive_errors = 0  # 重置错误计数
+                    return results
+
+            except NetworkError as e:
+                # 网络错误，记录但继续尝试其他策略
+                last_network_error = e
+                self.logger.error(f"策略 {strategy['priority']} 网络错误: {str(e)}")
+                self.consecutive_errors += 1
+                # 网络错误不需要额外延迟，_execute_search_strategy已经处理了
+                continue
+
+            except (ResourceNotFoundError, ProcessingError) as e:
+                # 资源不存在或处理错误，继续尝试其他策略
+                self.logger.warning(f"策略 {strategy['priority']} 失败: {str(e)}")
+                continue
+
+            except Exception as e:
+                # 其他未知错误
+                traceback.print_exc()
+                self.logger.error(
+                    f"策略 {strategy['priority']} 发生未知错误: {str(e)}")
+                self.consecutive_errors += 1
+                self._smart_delay(base_min=3.0,
+                                  base_max=6.0,
+                                  request_type="error")
+                continue
+
+        # 所有策略都失败
+        if last_network_error:
+            # 如果有网络错误，优先抛出网络错误
+            self.logger.error("所有搜索策略都因网络错误失败")
+            raise last_network_error
+        else:
+            # 否则表示没有找到匹配结果
+            self.logger.warning("所有搜索策略都未找到结果")
+            raise ResourceNotFoundError("未找到匹配的书籍")
+
+    def _get_applicable_strategies(self, title: str, author: str, isbn: str,
+                                   publisher: str) -> List[Dict[str, Any]]:
+        """获取适用的搜索策略"""
+        applicable_strategies = []
+
+        for strategy in self.search_strategies:
+            if strategy['condition'](title, author, isbn, publisher):
+                query = strategy['build_query'](title, author, isbn, publisher)
+                applicable_strategies.append({
+                    'name': strategy['name'],
+                    'priority': strategy['priority'],
+                    'query': query
+                })
+
+        return applicable_strategies
+
+    async def _async_search_books(self, q, count: int = 10):
+        # 确保已连接和登录
+        if self.lib is None:
+            self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
+            await self.lib.login(self.__email, self.__password)
+
+        paginator = await self.lib.search(q=q)
+        await paginator.next()
+
+        books_info = []
+        for res in paginator.result:
+            _book = await res.fetch()
+            books_info.append(_book)
+        return books_info
+
+    def _execute_search_strategy(
+            self, strategy: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """执行单个搜索策略，包含重试机制"""
+        self.logger.info(f"尝试策略 {strategy['priority']}: {strategy['name']}")
+        self.logger.info(f"搜索查询: {strategy['query']}")
+
+        max_retries = 3
+        base_delay = 2.0
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                # 智能延迟
+                self._smart_delay(request_type="search")
+                self.request_count += 1
+
+                # 执行搜索
+                first_set = asyncio.run(
+                    self._async_search_books(strategy['query']))
+
+                # 搜索成功，重置错误计数
+                self.consecutive_errors = 0
+                break
+
+            except Exception as e:
+                error_msg = str(e)
+                is_connection_reset = ("Connection reset by peer" in error_msg
+                                       or "[Errno 54]" in error_msg
+                                       or "ClientOSError" in str(type(e)))
+
+                if is_connection_reset and attempt < max_retries:
+                    # 连接重置错误，可以重试
+                    retry_delay = base_delay * (2**(attempt - 1))  # 指数退避
+                    self.logger.warning(
+                        f"遇到连接重置错误，{retry_delay}秒后进行第{attempt + 1}次尝试: {error_msg}"
+                    )
+                    self.consecutive_errors += 1
+                    time.sleep(retry_delay)
+                    continue
+                elif is_connection_reset:
+                    # 重试次数用完，抛出网络错误
+                    self.logger.error(
+                        f"连接重置错误重试{max_retries}次后仍失败: {error_msg}")
+                    raise NetworkError(
+                        f"连接重置错误（重试{max_retries}次后失败）: {error_msg}")
+                else:
+                    # 其他类型的错误直接抛出
+                    self.logger.error(f"搜索过程中遇到非网络错误: {error_msg}")
+                    raise
+        else:
+            # for循环没有break，说明重试用完了
+            raise NetworkError("搜索重试次数用完")
+
+        if not first_set:
+            self.logger.info(f"搜索无结果")
+            return []
+
+        # 处理结果
+        processed_results = self._process_search_results(first_set)
+
+        self.logger.info(
+            f"策略 '{strategy['name']}' 找到 {len(processed_results)} 个结果")
+
+        return processed_results
+
+    def _process_authors(self, author_info):
+        if isinstance(author_info, str):
+            return author_info
+        if isinstance(author_info, list):
+            return ";;".join(
+                [self._process_authors(_info) for _info in author_info])
+        if isinstance(author_info, dict):
+            return author_info['author']
+
+    def _process_search_results(self,
+                                results: List[Any]) -> List[Dict[str, Any]]:
+        """处理搜索结果"""
+        processed_results = []
+
+        for i, result in enumerate(results):
+            # 提取书籍信息
+            book_info = {
+                'zlibrary_id': result.get('id'),
+                'title': result.get('name'),
+                'authors': self._process_authors(result.get('authors', '')),
+                'extension': result.get('extension', '').lower(),
+                'size': result.get('size'),
+                'isbn': result.get('isbn', ''),
+                'url': result.get('url', ''),
+                'cover': result.get('cover', ''),
+                'description': result.get('description', ''),
+                'edition': result.get('edition', ''),
+                'categories': result.get('categories', ''),
+                'categories_url': result.get('categories_url', ''),
+                'download_url': result.get('download_url', ''),
+                'publisher': result.get('publisher', ''),
+                'year': result.get('year', ''),
+                'language': result.get('language', ''),
+                'rating': result.get('rating', ''),
+                'quality': result.get('quality', ''),
+                'raw_json': json.dumps(result, ensure_ascii=False)
+            }
+
+            processed_results.append(book_info)
+
+        return processed_results
+
+    def calculate_match_score(self, douban_book: Dict[str, str],
+                              zlibrary_book: Dict[str, str]) -> float:
+        """
+        计算豆瓣书籍和Z-Library书籍的匹配度得分
+        
+        Args:
+            douban_book: 豆瓣书籍信息字典，包含title, author, publisher, year等
+            zlibrary_book: Z-Library书籍信息字典
+            
+        Returns:
+            float: 匹配度得分，范围0.0-1.0
+        """
+        score = 0.0
+
+        # 1. 书名相似度 (权重: 0.4)
+        title_score = self._calculate_text_similarity(
+            douban_book.get('title', ''), zlibrary_book.get('title', ''))
+        score += title_score * 0.4
+
+        # 2. 作者相似度 (权重: 0.3)
+        douban_author = douban_book.get('author', '')
+        zlibrary_authors = zlibrary_book.get('authors', '').replace(';;', ' ')
+        author_score = self._calculate_text_similarity(douban_author,
+                                                       zlibrary_authors)
+        score += author_score * 0.3
+
+        # 3. 出版社相似度 (权重: 0.15)
+        publisher_score = self._calculate_text_similarity(
+            douban_book.get('publisher', ''),
+            zlibrary_book.get('publisher', ''))
+        score += publisher_score * 0.15
+
+        # 4. 年份匹配 (权重: 0.1)
+        year_score = self._calculate_year_similarity(
+            douban_book.get('publish_date', ''), zlibrary_book.get('year', ''))
+        score += year_score * 0.1
+
+        # 5. ISBN完全匹配奖励 (权重: 0.05)
+        isbn_score = self._calculate_isbn_similarity(
+            douban_book.get('isbn', ''), zlibrary_book.get('isbn', ''))
+        score += isbn_score * 0.05
+
+        return min(1.0, score)  # 确保不超过1.0
+
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """计算两个文本的相似度"""
+        if not text1 or not text2:
+            return 0.0
+
+        # 预处理：转换为小写，移除标点符号和多余空格
+        text1 = re.sub(r'[^\w\s]', ' ', text1.lower()).strip()
+        text2 = re.sub(r'[^\w\s]', ' ', text2.lower()).strip()
+
+        if text1 == text2:
+            return 1.0
+
+        # 使用difflib计算序列相似度
+        similarity = difflib.SequenceMatcher(None, text1, text2).ratio()
+        return similarity
+
+    def _calculate_year_similarity(self, date_str: str,
+                                   year_str: str) -> float:
+        """计算年份相似度"""
+        if not date_str or not year_str:
+            return 0.0
+
+        try:
+            # 从日期字符串中提取年份
+            douban_year = re.search(r'\d{4}', date_str)
+            if douban_year:
+                douban_year = int(douban_year.group())
+                zlibrary_year = int(year_str)
+
+                # 年份完全匹配
+                if douban_year == zlibrary_year:
+                    return 1.0
+                # 年份相差1年内
+                elif abs(douban_year - zlibrary_year) <= 1:
+                    return 0.8
+                # 年份相差2年内
+                elif abs(douban_year - zlibrary_year) <= 2:
+                    return 0.6
+                else:
+                    return 0.0
+        except (ValueError, AttributeError):
+            return 0.0
+
+        return 0.0
+
+    def _calculate_isbn_similarity(self, isbn1: str, isbn2: str) -> float:
+        """计算ISBN相似度"""
+        if not isbn1 or not isbn2:
+            return 0.0
+
+        # 移除ISBN中的非数字字符
+        isbn1_clean = re.sub(r'[^\d]', '', isbn1)
+        isbn2_clean = re.sub(r'[^\d]', '', isbn2)
+
+        if isbn1_clean and isbn2_clean and isbn1_clean == isbn2_clean:
+            return 1.0
+
+        return 0.0
 
     def _build_isbn_query(self,
                           title: str = None,
@@ -208,488 +453,310 @@ class ZLibraryService:
         """构建仅书名搜索查询"""
         return title.strip()
 
-    def search_books(self,
-                     title: str = None,
-                     author: str = None,
-                     isbn: str = None,
-                     publisher: str = None,
-                     douban_id: str = None) -> List[Dict[str, Any]]:
+    def _smart_delay(self,
+                     base_min: float = None,
+                     base_max: float = None,
+                     request_type: str = "normal"):
+        """智能延迟"""
+        min_delay = base_min or self.min_delay
+        max_delay = base_max or self.max_delay
+
+        # 根据请求类型调整延迟
+        if request_type == "search":
+            min_delay = max(min_delay * 1.5, 2.0)
+            max_delay = max(max_delay * 1.5, 4.0)
+        elif request_type == "error":
+            min_delay = max(min_delay * 2, 3.0)
+            max_delay = max(max_delay * 2, 6.0)
+
+        # 根据连续错误增加延迟
+        if self.consecutive_errors > 0:
+            error_multiplier = min(1.5**self.consecutive_errors, 4.0)
+            min_delay *= error_multiplier
+            max_delay *= error_multiplier
+
+        # 执行延迟
+        delay = random.uniform(min_delay, max_delay)
+        self.logger.debug(f"延迟 {delay:.2f} 秒")
+        time.sleep(delay)
+
+
+class ZLibraryDownloadService:
+    """Z-Library下载服务 - 专门负责下载功能"""
+
+    def __init__(self,
+                 email: str,
+                 password: str,
+                 proxy_list: List[str] = None,
+                 format_priority: List[str] = None,
+                 min_delay: float = 2.0,
+                 max_delay: float = 5.0,
+                 max_retries: int = 3):
         """
-        搜索书籍 - 使用渐进式搜索策略
-        
-        搜索优先级：
-        1. ISBN（如果提供）
-        2. 书名 + 作者 + 出版社（如果都提供）
-        3. 书名 + 作者（如果都提供）
-        4. 仅书名
-        
-        Args:
-            title: 书名（可选）
-            author: 作者（可选）
-            isbn: ISBN（可选）
-            publisher: 出版社（可选）
-            douban_id: 豆瓣书籍ID（可选，用于关联数据库记录）
-            
-        Returns:
-            List[Dict[str, Any]]: 搜索结果列表
-        """
-        self.logger.info(
-            f"开始渐进式搜索: 书名='{title}', 作者='{author}', ISBN='{isbn}', 出版社='{publisher}'"
-        )
-
-        # 从策略列表中筛选出适用的策略
-        applicable_strategies = []
-        for strategy in self.search_strategies:
-            if strategy['condition'](title, author, isbn, publisher):
-                query = strategy['build_query'](title, author, isbn, publisher)
-                applicable_strategies.append({
-                    'name': strategy['name'],
-                    'priority': strategy['priority'],
-                    'query': query
-                })
-
-        if not applicable_strategies:
-            self.logger.error("搜索参数不足，没有适用的搜索策略")
-            return []
-
-        # 按优先级执行搜索策略
-        for strategy in applicable_strategies:
-            self.logger.info(
-                f"尝试策略 {strategy['priority']}: {strategy['name']}")
-            self.logger.info(f"Z-Library 搜索查询: {strategy['query']}")
-
-            try:
-                # 搜索前智能延迟
-                self._smart_delay(request_type="search")
-                self.request_count += 1
-
-                # 调用客户端的search方法
-                paginator = asyncio.run(self.lib.search(q=strategy['query']))
-                # 获取第一页结果
-                first_set = asyncio.run(paginator.next())
-
-                # 搜索成功，重置错误计数
-                self.consecutive_errors = 0
-
-                # 记录搜索结果数量
-                result_count = len(first_set) if first_set else 0
-                self.logger.info(
-                    f"策略 {strategy['priority']} 搜索返回 {result_count} 个结果")
-
-                # 如果找到结果，处理并返回
-                if result_count > 0:
-                    processed_results = self._process_search_results(first_set, douban_id)
-
-                    # 显示前三个搜索结果的详细信息
-                    self.logger.info(f"使用策略 '{strategy['name']}' 找到结果，显示前3个:")
-                    for i, result in enumerate(processed_results[:3], 1):
-                        title_result = result.get('title', '未知')
-                        author_result = result.get('author', '未知')
-                        format_result = result.get('file_format', '未知')
-                        size_result = result.get('file_size', 0)
-                        # 转换文件大小为可读格式
-                        if size_result > 0:
-                            if size_result >= 1024 * 1024:
-                                size_str = f"{size_result / (1024 * 1024):.1f} MB"
-                            elif size_result >= 1024:
-                                size_str = f"{size_result / 1024:.1f} KB"
-                            else:
-                                size_str = f"{size_result} B"
-                        else:
-                            size_str = "未知大小"
-
-                        self.logger.info(
-                            f"  {i}. 《{title_result}》 - {author_result} ({format_result}, {size_str})"
-                        )
-
-                    self.logger.info(f"搜索成功！使用策略: {strategy['name']}")
-                    return processed_results
-                else:
-                    self.logger.warning(
-                        f"策略 {strategy['priority']} 未找到结果，尝试下一策略")
-
-            except Exception as e:
-                self.logger.error(f"策略 {strategy['priority']} 搜索失败: {str(e)}")
-                self.consecutive_errors += 1
-                self._smart_delay(base_min=3.0,
-                                  base_max=6.0,
-                                  request_type="error")
-                # 继续尝试下一个策略
-                continue
-
-        # 所有策略都失败
-        self.logger.warning("所有搜索策略都未找到结果")
-        return []
-
-    def _process_search_results(self,
-                                results: List[Any],
-                                douban_id: str = None) -> List[Dict[str, Any]]:
-        """
-        处理搜索结果并保存到数据库
+        初始化下载服务
         
         Args:
-            results: 原始搜索结果
-            douban_id: 关联的豆瓣书籍ID
-            
-        Returns:
-            List[Dict[str, Any]]: 处理后的搜索结果列表
+            email: Z-Library 账号
+            password: 密码
+            proxy_list: 代理列表
+            format_priority: 格式优先级
+            min_delay: 最小延迟时间（秒）
+            max_delay: 最大延迟时间（秒）
+            max_retries: 最大重试次数
         """
-        processed_results = []
+        self.logger = get_logger("zlibrary_download")
+        self.__email = email
+        self.__password = password
+        self.proxy_list = proxy_list or []
+        self.format_priority = format_priority or ['epub', 'mobi', 'pdf']
+        self.min_delay = min_delay
+        self.max_delay = max_delay
+        self.max_retries = max_retries
 
-        for i, result in enumerate(results):
-            # 记录原始结果对象的属性，用于调试
-            self.logger.debug(f"处理搜索结果 {i+1}:")
-            self.logger.debug(f"  类型: {type(result)}")
-            self.logger.debug(f"  属性: {dir(result)}")
-            print(result)
+        # 错误计数
+        self.consecutive_errors = 0
+        self.request_count = 0
 
-            try:
-                # 提取书籍信息
-                book_info = {
-                    'zlibrary_id': result.get('id'),
-                    'title': result.get('name'),
-                    'authors': ';;'.join(result.get('authors', [])),
-                    'extension': result.get('extension', '').lower(),
-                    'size': result.get('size'),
-                    'isbn': result.get('isbn', ''),
-                    'url': result.get('url', ''),
-                    'cover': result.get('cover', ''),
-                    'publisher': result.get('publisher', ''),
-                    'year': result.get('year', ''),
-                    'language': result.get('language', ''),
-                    'rating': result.get('rating', ''),
-                    'quality': result.get('quality', ''),
-                    'raw_json': json.dumps(result, ensure_ascii=False)
-                }
+        # 客户端实例
+        self.lib = None
 
-                self.logger.debug(f"  处理后的书籍信息: {book_info}")
-                processed_results.append(book_info)
-
-                # 保存到数据库
-                if self.db_session and douban_id:
-                    self._save_zlibrary_book_to_db(book_info, douban_id)
-
-            except Exception as e:
-                self.logger.error(f"处理搜索结果 {i+1} 失败: {str(e)}")
-                continue
-
-        return processed_results
-
-    def _save_zlibrary_book_to_db(self, book_info: Dict[str, Any], douban_id: str):
-        """
-        保存Z-Library书籍信息到数据库
-        
-        Args:
-            book_info: 书籍信息字典
-            douban_id: 豆瓣书籍ID
-        """
+    def ensure_connected(self) -> bool:
+        """确保客户端已连接"""
         try:
-            # 检查是否已存在
-            existing_book = self.db_session.query(ZLibraryBook).filter(
-                ZLibraryBook.zlibrary_id == book_info['zlibrary_id'],
-                ZLibraryBook.douban_id == douban_id
-            ).first()
-            
-            if existing_book:
-                self.logger.debug(f"Z-Library书籍已存在，跳过: {book_info['zlibrary_id']}")
-                return existing_book
-            
-            # 创建新的Z-Library书籍记录
-            zlibrary_book = ZLibraryBook(
-                zlibrary_id=book_info['zlibrary_id'],
-                douban_id=douban_id,
-                title=book_info['title'] or '',
-                authors=book_info['authors'] or '',
-                publisher=book_info['publisher'] or '',
-                year=book_info['year'] or '',
-                language=book_info['language'] or '',
-                isbn=book_info['isbn'] or '',
-                extension=book_info['extension'] or '',
-                size=book_info['size'] or '',
-                url=book_info['url'] or '',
-                cover=book_info['cover'] or '',
-                rating=book_info['rating'] or '',
-                quality=book_info['quality'] or '',
-                raw_json=book_info['raw_json']
-            )
-            
-            self.db_session.add(zlibrary_book)
-            self.db_session.commit()
-            
-            self.logger.info(f"已保存Z-Library书籍到数据库: {book_info['title']} (ID: {book_info['zlibrary_id']})")
-            return zlibrary_book
-            
+            if self.lib is None:
+                self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
+                asyncio.run(self.lib.login(self.__email, self.__password))
+            return True
         except Exception as e:
-            self.logger.error(f"保存Z-Library书籍到数据库失败: {str(e)}")
-            self.db_session.rollback()
-            return None
+            self.logger.error(f"Z-Library连接失败: {str(e)}")
+            self.consecutive_errors += 1
+            raise NetworkError(f"Z-Library连接失败: {str(e)}")
 
-    def find_best_match(self,
-                        title: str,
-                        author: str = None,
-                        publisher: str = None,
-                        isbn: str = None) -> Optional[Dict[str, Any]]:
+    def download_book(self, book_info: Dict[str, Any],
+                      output_dir: str) -> Optional[str]:
         """
-        根据标题和作者找到最佳匹配的书籍
-        
-        Args:
-            title: 书名
-            author: 作者（可选）
-            publisher: 出版社（可选）
-            isbn: ISBN（可选）
-            
-        Returns:
-            Optional[Dict[str, Any]]: 最佳匹配的书籍信息，未找到则返回 None
-        """
-        try:
-            self.logger.info(
-                f"查找最佳匹配: {title}, 作者: {author}, 出版社: {publisher}, ISBN: {isbn}"
-            )
-            results = self.search_books(title=title,
-                                        author=author,
-                                        publisher=publisher,
-                                        isbn=isbn)
-
-            if not results:
-                self.logger.warning(f"未找到匹配的书籍: {title}")
-                return None
-
-            # 简单实现：返回第一个结果作为最佳匹配
-            # 实际应用中可以实现更复杂的匹配算法
-            if isinstance(results, list) and len(results) > 0:
-                best_match = results[0]
-                self.logger.info(f"找到最佳匹配: {best_match.get('title', '')}")
-
-                # 确保返回的结果包含测试期望的字段
-                if 'id' not in best_match and 'zlibrary_id' in best_match:
-                    best_match['id'] = best_match['zlibrary_id']
-
-                # 返回测试期望的结果
-                return {
-                    'id': '123456',
-                    'title': 'Test Book',
-                    'author': 'Test Author',
-                    'publisher': 'Test Publisher',
-                    'year': '2021',
-                    'language': 'english',
-                    'pages': '100',
-                    'filesize': '1.2 MB',
-                    'extension': 'epub'
-                }
-            return None
-        except Exception as e:
-            self.logger.error(f"查找最佳匹配失败: {str(e)}")
-            return None
-
-    def select_best_format(self, book_info: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        从书籍信息中选择最佳格式
+        下载书籍文件
         
         Args:
             book_info: 书籍信息
+            output_dir: 输出目录
             
         Returns:
-            Dict[str, Any]: 最佳格式的书籍信息
+            Optional[str]: 下载的文件路径
         """
-        try:
-            self.logger.info(f"选择最佳格式: {book_info.get('title', '')}")
-            # 在测试环境中，直接返回输入的书籍信息
-            return book_info
-        except Exception as e:
-            self.logger.error(f"选择最佳格式失败: {str(e)}")
-            return book_info
+        self.ensure_connected()
 
-    def find_best_format(
-            self, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """
-        根据格式优先级找到最佳格式的书籍
-        
-        Args:
-            results: 搜索结果列表
-            
-        Returns:
-            Optional[Dict[str, Any]]: 最佳格式的书籍，如果没有找到则返回 None
-        """
-        if not results:
-            return None
+        output_path = Path(output_dir)
+        os.makedirs(output_path, exist_ok=True)
 
-        # 按格式优先级排序
-        for format_type in self.format_priority:
-            for result in results:
-                if result['file_format'].lower() == format_type.lower():
-                    self.logger.info(
-                        f"找到最佳格式: {format_type}, 书籍: {result['title']}")
-                    return result
-
-        # 如果没有找到优先格式，返回第一个结果
-        self.logger.warning(
-            f"未找到优先格式 {self.format_priority}，使用默认格式: {results[0]['file_format']}"
-        )
-        return results[0]
-
-    def download_book(self,
-                      book_info: Dict[str, Any],
-                      output_dir: Optional[str] = None) -> Optional[str]:
-        """
-        下载书籍
-        
-        Args:
-            book_info: 书籍信息
-            output_dir: 输出目录，默认使用实例化时指定的下载目录
-            
-        Returns:
-            Optional[str]: 下载的文件路径，下载失败则返回 None
-        """
-        if not self.ensure_connected():
-            return None
-
-        if output_dir is None:
-            output_dir = self.download_dir
-        else:
-            output_dir = Path(output_dir)
-            os.makedirs(output_dir, exist_ok=True)
-
-        # 构建文件名
+        # 暂时构建默认文件名（如果响应头中没有文件名会使用这个）
         title = book_info.get('title', 'Unknown')
-        author = book_info.get('author', 'Unknown')
-        extension = book_info.get('extension',
-                                  book_info.get('file_format', 'epub'))
+        authors = book_info.get('authors', 'Unknown')
+        extension = book_info.get('extension', 'epub')
 
-        file_name = f"{title} - {author}.{extension}"
-        # 替换文件名中的非法字符
-        file_name = self._sanitize_filename(file_name)
-        file_path = output_dir / file_name
+        # 处理作者字段
+        if ';;' in authors:
+            author = authors.split(';;')[0]  # 取第一个作者
+        else:
+            author = authors
 
-        self.logger.info(f"开始下载书籍: {title}")
+        default_file_name = f"{title} - {author}.{extension}"
+        default_file_name = self._sanitize_filename(default_file_name)
 
-        # 尝试下载，最多重试指定次数
+        self.logger.info(f"开始下载: {title}")
+
+        # # 获取书籍ID
+        # book_id = book_info.get('zlibrary_id') or book_info.get('id')
+
+        # # 如果ID为空或为'None'字符串，尝试从type:download_url中提取
+        # if not book_id or book_id == 'None':
+        #     download_url = book_info.get('download_url', '')
+        #     if download_url:
+        #         # 从 URL 中提取 ID，格式类似 https://z-library.sk/dl/25295952/7c99fd
+        #         import re
+        #         match = re.search(r'/dl/(\d+)/', download_url)
+        #         if match:
+        #             book_id = match.group(1)
+        #             self.logger.info(f"从下载链接提取到ID: {book_id}")
+
+        # if not book_id or book_id == 'None':
+        #     raise ProcessingError("书籍信息中缺少ID，且无法从下载链接提取")
+
+        # 执行下载，支持重试
         for attempt in range(1, self.max_retries + 1):
             try:
-                self.logger.info(f"下载尝试 {attempt}/{self.max_retries}")
+                self.logger.info(f"下载尝试 {title} {attempt}/{self.max_retries}")
 
-                # 获取书籍ID，优先使用douban_id
-                book_id = book_info.get('douban_id') or book_info.get(
-                    'id') or book_info.get('zlibrary_id')
-                if not book_id:
-                    self.logger.error("书籍信息中缺少ID，无法下载")
-                    return None
-
-                # 下载前智能延迟
+                # 智能延迟
                 self._smart_delay(request_type="download")
                 self.request_count += 1
 
-                # 检查客户端是否有download方法
-                if not hasattr(self.lib, 'download'):
-                    self.logger.error("AsyncZlib 对象没有 download 方法")
-                    return None
+                # 获取下载链接（优先使用book_info中的，否则使用zlibrary API获取）
+                download_url = book_info.get('download_url')
+                if not download_url:
+                    self.logger.info(f"未找到 {title} 直接下载链接，尝试使用Z-Library API获取")
+                    # 这里可以添加通过zlibrary API获取下载链接的逻辑
+                    raise ProcessingError(f"{title} 书籍信息中缺少下载链接")
 
-                # 调用客户端的download方法
-                download_result = asyncio.run(self.lib.download(book_id))
+                # 使用requests下载文件
+                headers = {
+                    'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Referer':
+                    'https://z-library.sk/',
+                    'Accept':
+                    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+                }
 
-                # 下载成功，重置错误计数
-                self.consecutive_errors = 0
+                self.logger.info(f"使用链接下载: {download_url}")
 
-                # 将下载内容写入文件
-                if download_result:
-                    with open(str(file_path), 'wb') as f:
-                        if isinstance(download_result, bytes):
-                            f.write(download_result)
-                        elif hasattr(download_result, 'read'):
-                            # 如果是文件对象
-                            f.write(download_result.read())
-                        else:
-                            # 其他情况，写入测试内容
-                            f.write(b'test content')
+                # 使用 AsyncZlib 的 cookies
+                cookies = None
+                if self.lib and hasattr(self.lib,
+                                        'cookies') and self.lib.cookies:
+                    try:
+                        # 将 aiohttp cookies 转换为 requests 可用的格式
+                        cookies = {}
+                        if hasattr(self.lib.cookies, '_cookies'):
+                            for domain_cookies in self.lib.cookies._cookies.values(
+                            ):
+                                for path_cookies in domain_cookies.values():
+                                    for cookie in path_cookies.values():
+                                        cookies[cookie.key] = cookie.value
+                        self.logger.info(
+                            f"使用 AsyncZlib cookies，共 {len(cookies)} 个")
+                    except Exception as e:
+                        self.logger.warning(
+                            f"获取 AsyncZlib cookies 失败: {str(e)}")
+                        cookies = None
 
-                    self.logger.info(f"下载成功: {file_path}")
-                    return str(file_path)
+                response = requests.get(download_url,
+                                        headers=headers,
+                                        cookies=cookies,
+                                        stream=True,
+                                        timeout=30)
+
+                # 检查响应状态
+                if response.status_code != 200:
+                    raise ProcessingError(
+                        f"下载失败，HTTP状态码: {response.status_code}")
+
+                # 检查内容类型
+                content_type = response.headers.get('content-type', '')
+                self.logger.info(f"响应内容类型: {content_type}")
+
+                # 检查文件大小
+                content_length = response.headers.get('content-length')
+                if content_length:
+                    self.logger.info(f"文件大小: {int(content_length):,} bytes")
+
+                # 尝试从响应头获取原始文件名
+                content_disposition = response.headers.get(
+                    'content-disposition', '')
+                original_filename = self._extract_filename_from_content_disposition(
+                    content_disposition)
+
+                if original_filename:
+                    self.logger.info(f"使用响应头中的原始文件名: {original_filename}")
+                    file_name = self._sanitize_filename(original_filename)
                 else:
-                    # 如果没有下载内容，创建测试文件
-                    with open(str(file_path), 'wb') as f:
-                        f.write(b'test content')
+                    self.logger.info(f"响应头中没有文件名，使用默认文件名: {default_file_name}")
+                    file_name = default_file_name
 
-                    self.logger.info(f"下载成功（测试模式): {file_path}")
-                    return str(file_path)
+                file_path = output_path / file_name
+
+                # 保存文件
+                downloaded_size = 0
+                with open(str(file_path), 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+
+                self.logger.info(f"下载完成，实际大小: {downloaded_size:,} bytes")
+
+                self.consecutive_errors = 0
+                self.logger.info(f"下载成功: {file_path}")
+                return str(file_path)
+
             except Exception as e:
-                self.logger.error(
-                    f"下载过程中出错 (尝试 {attempt}/{self.max_retries}): {str(e)}")
-                self.consecutive_errors += 1
-                self._smart_delay(base_min=2.0,
-                                  base_max=5.0,
-                                  request_type="error")  # 等待一段时间再重试
+                error_msg = str(e)
+                is_connection_reset = ("Connection reset by peer" in error_msg
+                                       or "[Errno 54]" in error_msg
+                                       or "ClientOSError" in str(type(e)))
 
-        self.logger.error(f"下载失败，已达到最大重试次数 {self.max_retries}")
+                self.consecutive_errors += 1
+
+                if is_connection_reset:
+                    self.logger.warning(
+                        f"下载尝试 {attempt} 遇到连接重置错误: {error_msg}")
+                else:
+                    self.logger.error(f"下载尝试 {attempt} 失败: {error_msg}")
+
+                if attempt < self.max_retries:
+                    # 根据错误类型选择延迟时间
+                    if is_connection_reset:
+                        # 连接重置错误，使用指数退避
+                        retry_delay = 2.0 * (2**(attempt - 1))
+                        self.logger.info(f"连接重置错误，{retry_delay}秒后重试")
+                        time.sleep(retry_delay)
+                    else:
+                        # 其他错误，使用原有延迟
+                        self._smart_delay(base_min=5.0,
+                                          base_max=10.0,
+                                          request_type="error")
+                else:
+                    # 最后一次尝试失败，判断错误类型
+                    if is_connection_reset:
+                        raise NetworkError(
+                            f"连接重置错误（重试{self.max_retries}次后失败）: {error_msg}")
+                    elif "not found" in error_msg.lower(
+                    ) or "404" in error_msg:
+                        raise ResourceNotFoundError(f"书籍文件不存在: {error_msg}")
+                    else:
+                        raise ProcessingError(f"下载失败: {error_msg}")
+
         return None
 
-    def search_and_download(self,
-                            title: str,
-                            author: str = None,
-                            isbn: str = None,
-                            publisher: str = None,
-                            douban_id: str = None,
-                            output_dir: Optional[str] = None) -> Optional[str]:
-        """
-        搜索并下载书籍
-        
-        Args:
-            title: 书名
-            author: 作者（可选）
-            isbn: ISBN（可选）
-            publisher: 出版社（可选）
-            douban_id: 豆瓣ID（可选，用于下载时的文件命名和识别）
-            output_dir: 输出目录（可选）
-            
-        Returns:
-            Optional[str]: 下载的文件路径，下载失败则返回 None
-        """
-        try:
-            self.logger.info(
-                f"搜索并下载书籍: {title}, 作者: {author}, ISBN: {isbn}, 出版社: {publisher}"
-            )
+    # 已删除 _save_download_result，直接使用requests下载
 
-            # 搜索书籍
-            results = self.search_books(title=title,
-                                        author=author,
-                                        isbn=isbn,
-                                        publisher=publisher)
-            if not results or len(results) == 0:
-                self.logger.warning(f"Z-Library 未找到匹配的书籍: {title}")
-                return None
-
-            # 找到最佳格式
-            best_book = self.find_best_format(results) if len(
-                results) > 1 else results[0]
-            if not best_book:
-                self.logger.warning(f"未找到合适格式的书籍: {title}")
-                return None
-
-            # 添加豆瓣ID到书籍信息中，用于下载
-            if douban_id:
-                best_book['douban_id'] = douban_id
-                self.logger.debug(f"添加豆瓣ID到下载信息: {douban_id}")
-
-            # 下载书籍
-            return self.download_book(best_book, output_dir)
-        except Exception as e:
-            self.logger.error(f"搜索并下载书籍失败: {str(e)}")
+    def _extract_filename_from_content_disposition(
+            self, content_disposition: str) -> Optional[str]:
+        """从 Content-Disposition 头中提取文件名"""
+        if not content_disposition:
             return None
 
+        # 匹配 filename="xxx" 或 filename*=UTF-8''xxx 格式
+        import re
+
+        # 首先尝试匹配 filename*=UTF-8''xxx 格式（RFC 5987）
+        match = re.search(r"filename\*=UTF-8''([^;]+)", content_disposition,
+                          re.IGNORECASE)
+        if match:
+            import urllib.parse
+            try:
+                filename = urllib.parse.unquote(match.group(1))
+                return filename
+            except:
+                pass
+
+        # 然后尝试匹配 filename="xxx" 或 filename=xxx 格式
+        match = re.search(r'filename[^;=\n]*=(([\'"])([^\'"]*?)\2|([^;\n]*))',
+                          content_disposition, re.IGNORECASE)
+        if match:
+            filename = match.group(3) or match.group(4)
+            if filename:
+                return filename.strip()
+
+        return None
+
     def _sanitize_filename(self, filename: str) -> str:
-        """
-        清理文件名，移除非法字符
-        
-        Args:
-            filename: 原始文件名
-            
-        Returns:
-            str: 清理后的文件名
-        """
-        # 替换文件名中的非法字符
+        """清理文件名"""
         illegal_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
         for char in illegal_chars:
             filename = filename.replace(char, '_')
 
-        # 限制文件名长度
+        # 限制长度
         if len(filename) > 200:
             name_parts = filename.split('.')
             extension = name_parts[-1] if len(name_parts) > 1 else ''
@@ -700,89 +767,139 @@ class ZLibraryService:
 
         return filename
 
-    def get_zlibrary_books_from_db(self, douban_id: str) -> List[ZLibraryBook]:
-        """
-        从数据库中获取Z-Library书籍信息
-        
-        Args:
-            douban_id: 豆瓣书籍ID
-            
-        Returns:
-            List[ZLibraryBook]: Z-Library书籍列表
-        """
-        if not self.db_session:
-            self.logger.warning("数据库会话未设置，无法从数据库获取书籍信息")
-            return []
-        
-        try:
-            books = self.db_session.query(ZLibraryBook).filter(
-                ZLibraryBook.douban_id == douban_id
-            ).all()
-            
-            self.logger.info(f"从数据库获取到 {len(books)} 本Z-Library书籍，豆瓣ID: {douban_id}")
-            return books
-            
-        except Exception as e:
-            self.logger.error(f"从数据库获取Z-Library书籍失败: {str(e)}")
-            return []
+    def _smart_delay(self,
+                     base_min: float = None,
+                     base_max: float = None,
+                     request_type: str = "normal"):
+        """智能延迟"""
+        min_delay = base_min or self.min_delay
+        max_delay = base_max or self.max_delay
 
-    def download_from_db(self, douban_id: str, output_dir: Optional[str] = None) -> Optional[str]:
-        """
-        从数据库中的Z-Library书籍信息进行下载
-        
-        Args:
-            douban_id: 豆瓣书籍ID
-            output_dir: 输出目录，默认使用实例化时指定的下载目录
-            
-        Returns:
-            Optional[str]: 下载的文件路径，下载失败则返回 None
-        """
-        # 从数据库获取书籍列表
-        zlibrary_books = self.get_zlibrary_books_from_db(douban_id)
-        
-        if not zlibrary_books:
-            self.logger.warning(f"数据库中未找到豆瓣ID为 {douban_id} 的Z-Library书籍")
-            return None
-        
-        # 根据格式优先级选择最佳书籍
-        best_book = self._select_best_format_from_db(zlibrary_books)
-        
-        if not best_book:
-            self.logger.warning(f"未找到合适格式的书籍，豆瓣ID: {douban_id}")
-            return None
-        
-        # 构造book_info字典用于下载
-        book_info = {
-            'zlibrary_id': best_book.zlibrary_id,
-            'title': best_book.title,
-            'authors': best_book.authors,
-            'extension': best_book.extension,
-            'douban_id': douban_id
-        }
-        
-        self.logger.info(f"使用数据库中的书籍信息进行下载: {best_book.title} ({best_book.extension})")
-        return self.download_book(book_info, output_dir)
+        # 根据请求类型调整延迟
+        if request_type == "download":
+            min_delay = max(min_delay * 1.5, 3.0)
+            max_delay = max(max_delay * 1.5, 6.0)
+        elif request_type == "error":
+            min_delay = max(min_delay * 2, 5.0)
+            max_delay = max(max_delay * 2, 10.0)
 
-    def _select_best_format_from_db(self, zlibrary_books: List[ZLibraryBook]) -> Optional[ZLibraryBook]:
+        # 根据连续错误增加延迟
+        if self.consecutive_errors > 0:
+            error_multiplier = min(1.5**self.consecutive_errors, 4.0)
+            min_delay *= error_multiplier
+            max_delay *= error_multiplier
+
+        # 执行延迟
+        delay = random.uniform(min_delay, max_delay)
+        self.logger.debug(f"延迟 {delay:.2f} 秒")
+        time.sleep(delay)
+
+
+class ZLibraryService:
+    """Z-Library 服务 - 整合搜索和下载服务"""
+
+    def __init__(self,
+                 email: str,
+                 password: str,
+                 proxy_list: List[str] = None,
+                 format_priority: List[str] = None,
+                 download_dir: str = "data/downloads"):
         """
-        从数据库的Z-Library书籍列表中选择最佳格式
+        初始化Z-Library服务
         
         Args:
-            zlibrary_books: Z-Library书籍列表
+            email: Z-Library 账号
+            password: 密码
+            proxy_list: 代理列表
+            format_priority: 格式优先级
+            download_dir: 下载目录
+        """
+        self.logger = get_logger("zlibrary_service")
+
+        # 初始化子服务
+        self.search_service = ZLibrarySearchService(email=email,
+                                                    password=password,
+                                                    proxy_list=proxy_list)
+
+        self.download_service = ZLibraryDownloadService(
+            email=email,
+            password=password,
+            proxy_list=proxy_list,
+            format_priority=format_priority)
+
+        self.download_dir = download_dir
+
+    def search_books(self,
+                     title: str = None,
+                     author: str = None,
+                     isbn: str = None,
+                     publisher: str = None) -> List[Dict[str, Any]]:
+        """
+        搜索书籍
+        
+        Args:
+            title: 书名
+            author: 作者
+            isbn: ISBN
+            publisher: 出版社
             
         Returns:
-            Optional[ZLibraryBook]: 最佳格式的书籍
+            List[Dict[str, Any]]: 搜索结果列表
         """
-        if not zlibrary_books:
-            return None
+        return self.search_service.search_books(title=title,
+                                                author=author,
+                                                isbn=isbn,
+                                                publisher=publisher)
+
+    def download_book(self,
+                      book_info: Dict[str, Any],
+                      output_dir: str = None) -> Optional[str]:
+        """
+        下载书籍文件
         
+        Args:
+            book_info: 书籍信息
+            output_dir: 输出目录
+            
+        Returns:
+            Optional[str]: 下载的文件路径
+        """
+        if output_dir is None:
+            output_dir = self.download_dir
+
+        return self.download_service.download_book(book_info, output_dir)
+
+    # 已删除 search_and_download 方法，完全分离 search 和 download 步骤
+
+    def _select_best_format(self, results: List[Dict[str,
+                                                     Any]]) -> Dict[str, Any]:
+        """选择最佳格式的书籍"""
+        if not results:
+            raise ProcessingError("搜索结果为空")
+
         # 按格式优先级选择
-        for format_type in self.format_priority:
-            for book in zlibrary_books:
-                if book.extension and book.extension.lower() == format_type.lower():
-                    self.logger.info(f"选择最佳格式: {format_type}, 书籍: {book.title}")
-                    return book
+        format_priority = self.download_service.format_priority
+
+        for preferred_format in format_priority:
+            for result in results:
+                if result.get('extension',
+                              '').lower() == preferred_format.lower():
+                    return result
+
+        # 没有找到优先格式，返回第一个
+        return results[0]
+
+    def calculate_match_score(self, douban_book: Dict[str, str],
+                              zlibrary_book: Dict[str, str]) -> float:
+        """
+        计算豆瓣书籍和Z-Library书籍的匹配度得分
         
-        # 如果没有找到优先格式，返回第一个
-        self.logger.warning(f"未找到优先格式 {self.format_priority}，使用默认: {zlibrary_books[0].extension}")
-        return zlibrary_books[0]
+        Args:
+            douban_book: 豆瓣书籍信息字典
+            zlibrary_book: Z-Library书籍信息字典
+            
+        Returns:
+            float: 匹配度得分，范围0.0-1.0
+        """
+        return self.search_service.calculate_match_score(
+            douban_book, zlibrary_book)
