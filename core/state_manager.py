@@ -123,7 +123,8 @@ class BookStateManager:
     def __init__(self,
                  db_session: Session = None,
                  session_factory: Callable = None,
-                 lark_service=None):
+                 lark_service=None,
+                 task_scheduler=None):
         """
         初始化状态管理器
         
@@ -131,10 +132,12 @@ class BookStateManager:
             db_session: 数据库会话（可选，用于向后兼容）
             session_factory: 会话工厂函数，用于创建新会话
             lark_service: 飞书通知服务（可选）
+            task_scheduler: 任务调度器（可选）
         """
         self.db_session = db_session
         self.session_factory = session_factory
         self.lark_service = lark_service
+        self.task_scheduler = task_scheduler
         self.logger = get_logger("state_manager")
 
     @contextmanager
@@ -284,6 +287,9 @@ class BookStateManager:
                 self._send_status_change_notification(book, old_status,
                                                       to_status, change_reason,
                                                       processing_time)
+
+                # 检查是否需要调度下一个阶段的任务
+                self._schedule_next_stage_if_needed(book_id, to_status)
 
                 return True
 
@@ -552,3 +558,36 @@ class BookStateManager:
 
         except Exception as e:
             self.logger.warning(f"发送飞书通知失败: {str(e)}")
+
+    def _schedule_next_stage_if_needed(self, book_id: int, current_status: BookStatus):
+        """
+        检查是否需要调度下一个阶段的任务
+        
+        Args:
+            book_id: 书籍ID
+            current_status: 当前状态
+        """
+        if not self.task_scheduler:
+            return
+            
+        # 定义状态到下一个阶段的映射
+        next_stage_mapping = {
+            BookStatus.DETAIL_COMPLETE: "search",
+            BookStatus.SEARCH_COMPLETE: "download",
+            BookStatus.DOWNLOAD_COMPLETE: "upload",
+        }
+        
+        if current_status in next_stage_mapping:
+            next_stage = next_stage_mapping[current_status]
+            try:
+                # 导入TaskPriority避免循环导入
+                from core.task_scheduler import TaskPriority
+                task_id = self.task_scheduler.schedule_task(
+                    book_id=book_id,
+                    stage=next_stage,
+                    priority=TaskPriority.NORMAL,
+                    delay_seconds=1  # 稍微延迟确保状态更新完成
+                )
+                self.logger.info(f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}")
+            except Exception as e:
+                self.logger.error(f"自动调度下一阶段任务失败: {str(e)}")

@@ -1,12 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)",
-      "Bash(sqlite3:*)",
-      "Bash(cp:*)",
-      "Bash(PYTHONPATH=. python db/migration.py data/douban-zlib-calibre.db)",
-      "Bash(grep:*)",
-      "Bash(find:*)"
+      "Bash(PYTHONPATH=. python:*)",
+      "Bash(timeout 30 python main_v2.py --debug -o)"
     ],
     "deny": [],
     "ask": []

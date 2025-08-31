@@ -116,11 +116,22 @@ class DoubanZLibraryCalibrer:
     
     def _init_core_components(self):
         """初始化核心组件"""
-        # 状态管理器
+        # 任务调度器 - 先创建，将传递给状态管理器
+        max_concurrent_tasks = 1 if self.debug_mode else 10
+        self.task_scheduler = TaskScheduler(
+            state_manager=None,  # 稍后设置
+            max_concurrent_tasks=max_concurrent_tasks
+        )
+        
+        # 状态管理器 - 传递task_scheduler引用
         self.state_manager = BookStateManager(
             session_factory=self.db.session_factory,
-            lark_service=self.lark_service
+            lark_service=self.lark_service,
+            task_scheduler=self.task_scheduler
         )
+        
+        # 设置task_scheduler的state_manager引用
+        self.task_scheduler.state_manager = self.state_manager
         
         # Pipeline管理器
         max_workers = 1 if self.debug_mode else 4
@@ -131,15 +142,6 @@ class DoubanZLibraryCalibrer:
         
         if self.debug_mode:
             self.logger.info("调试模式已启用：使用单线程pipeline")
-        
-        # 任务调度器
-        max_concurrent_tasks = 1 if self.debug_mode else 10
-        self.task_scheduler = TaskScheduler(
-            self.state_manager,
-            max_concurrent_tasks=max_concurrent_tasks
-        )
-        
-        if self.debug_mode:
             self.logger.info(f"调试模式：限制并发任务数为 {max_concurrent_tasks}")
         
         

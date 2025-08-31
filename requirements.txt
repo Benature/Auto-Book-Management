@@ -44,3 +44,4 @@ types-pyyaml>=6.0.12.2
 python-dateutil>=2.8.2
 fuzzy-match>=0.0.1  # 模糊匹配算法
 tqdm>=4.64.1  # 进度条
+rich>=12.0.0  # 富文本终端库

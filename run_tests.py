@@ -9,6 +9,8 @@
     python run_tests.py integration  # 只运行集成测试
 """
 
+from pathlib import Path
+
 import unittest
 import sys
 import os

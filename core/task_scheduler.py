@@ -199,15 +199,13 @@ class TaskScheduler:
         stages = ["data_collection", "search", "download", "upload"]
         start_index = stages.index(start_stage) if start_stage in stages else 0
         
-        for i, stage in enumerate(stages[start_index:], start_index):
-            # 每个后续阶段延迟一点时间，确保顺序执行
-            delay = i * 5  # 5秒间隔
-            self.schedule_task(
-                book_id=book_id,
-                stage=stage,
-                priority=TaskPriority.NORMAL,
-                delay_seconds=delay
-            )
+        # 只调度当前阶段，后续阶段由state_manager在状态转换时调度
+        self.schedule_task(
+            book_id=book_id,
+            stage=start_stage,
+            priority=TaskPriority.NORMAL,
+            delay_seconds=0
+        )
     
     def start(self):
         """启动调度器"""
