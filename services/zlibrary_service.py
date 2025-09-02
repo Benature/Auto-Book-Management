@@ -621,6 +621,16 @@ class ZLibraryDownloadService:
 
                 print(headers)
 
+                # 配置代理
+                proxies = None
+                if self.proxy_list:
+                    proxy_url = random.choice(self.proxy_list)
+                    proxies = {
+                        'http': proxy_url,
+                        'https': proxy_url
+                    }
+                    self.logger.info(f"使用代理: {proxy_url}")
+
                 # 使用 AsyncZlib 的 cookies
                 # cookies = None
                 # if self.lib and hasattr(self.lib,
@@ -645,6 +655,7 @@ class ZLibraryDownloadService:
                     download_url,
                     headers=headers,
                     # cookies=cookies,
+                    proxies=proxies,
                     stream=True,
                     timeout=30)
 
@@ -692,6 +703,7 @@ class ZLibraryDownloadService:
                 return str(file_path)
 
             except Exception as e:
+                traceback.print_exc()
                 error_msg = str(e)
                 is_connection_reset = ("Connection reset by peer" in error_msg
                                        or "[Errno 54]" in error_msg
