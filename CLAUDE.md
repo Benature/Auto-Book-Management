@@ -2,9 +2,12 @@
 
 - 所有log都写在logs目录下
 - 非必要不写try
-- 测试写在tests目录下，使用pytest风格
 
-## Common Development Commands
+## test
+- 测试写在tests目录下，使用pytest风格
+- 使用真实配置进行测试，不使用mock
+
+# Common Development Commands
 
 ### Testing
 - **Run all tests**: `python run_tests.py` or `pytest tests/`

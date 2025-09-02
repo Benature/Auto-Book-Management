@@ -35,6 +35,7 @@ def zlibrary_service(config_manager):
     password = zlibrary_config['password']
     download_dir = zlibrary_config['download_dir']
     preferred_formats = zlibrary_config['format_priority']
+    proxy_list = zlibrary_config.get('proxy_list', [])
 
     # 创建测试下载目录
     os.makedirs(download_dir, exist_ok=True)
@@ -42,9 +43,10 @@ def zlibrary_service(config_manager):
     service = ZLibraryService(email=email,
                               password=password,
                               download_dir=download_dir,
-                              format_priority=preferred_formats)
+                              format_priority=preferred_formats,
+                              proxy_list=proxy_list)
 
-    yield service, email, password, download_dir, preferred_formats
+    yield service, email, password, download_dir, preferred_formats, proxy_list
 
     # 清理测试下载目录
     if os.path.exists(download_dir):
@@ -68,13 +70,10 @@ def zlibrary_service(config_manager):
 #     mock_zlib_client.assert_called_once_with()
 
 
-
-
-
 @patch('services.zlibrary_service.AsyncZlib')
 def test_search_books(mock_zlib_client, zlibrary_service):
     """测试搜索书籍功能"""
-    service, _, _, _, _ = zlibrary_service
+    service, _, _, _, _, proxy_list = zlibrary_service
 
     # 模拟搜索结果
     mock_search_results = [{
@@ -115,7 +114,7 @@ def test_search_books(mock_zlib_client, zlibrary_service):
 @patch('services.zlibrary_service.AsyncZlib')
 def test_find_best_match(mock_zlib_client, zlibrary_service):
     """测试找到最佳匹配功能"""
-    service, _, _, _, _ = zlibrary_service
+    service, _, _, _, _, _ = zlibrary_service
 
     # 模拟搜索结果
     mock_search_results = [{
@@ -168,7 +167,7 @@ def test_find_best_match(mock_zlib_client, zlibrary_service):
 def test_download_book(mock_exists, mock_file_open, mock_zlib_client,
                        zlibrary_service):
     """测试下载书籍功能"""
-    service, _, _, download_dir, _ = zlibrary_service
+    service, _, _, download_dir, _, _ = zlibrary_service
 
     # 模拟书籍信息
     book_info = {
@@ -215,7 +214,7 @@ def test_download_book(mock_exists, mock_file_open, mock_zlib_client,
 @patch('services.zlibrary_service.AsyncZlib')
 def test_search_and_download(mock_zlib_client, zlibrary_service):
     """测试搜索并下载功能"""
-    service, _, _, download_dir, _ = zlibrary_service
+    service, _, _, download_dir, _, _ = zlibrary_service
 
     # 模拟搜索结果
     mock_search_results = [{
@@ -260,7 +259,7 @@ def test_search_and_download(mock_zlib_client, zlibrary_service):
 @patch('services.zlibrary_service.ZlibClient')
 def test_select_best_format(mock_zlib_client, zlibrary_service):
     """测试选择最佳格式功能"""
-    service, _, _, _, _ = zlibrary_service
+    service, _, _, _, _, _ = zlibrary_service
 
     # 模拟不同格式的搜索结果
     mock_search_results = [{

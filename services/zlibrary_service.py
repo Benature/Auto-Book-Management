@@ -615,31 +615,38 @@ class ZLibraryDownloadService:
 
                 self.logger.info(f"使用链接下载: {download_url}")
 
-                # 使用 AsyncZlib 的 cookies
-                cookies = None
-                if self.lib and hasattr(self.lib,
-                                        'cookies') and self.lib.cookies:
-                    try:
-                        # 将 aiohttp cookies 转换为 requests 可用的格式
-                        cookies = {}
-                        if hasattr(self.lib.cookies, '_cookies'):
-                            for domain_cookies in self.lib.cookies._cookies.values(
-                            ):
-                                for path_cookies in domain_cookies.values():
-                                    for cookie in path_cookies.values():
-                                        cookies[cookie.key] = cookie.value
-                        self.logger.info(
-                            f"使用 AsyncZlib cookies，共 {len(cookies)} 个")
-                    except Exception as e:
-                        self.logger.warning(
-                            f"获取 AsyncZlib cookies 失败: {str(e)}")
-                        cookies = None
+                headers['Cookie'] = "; ".join(
+                    [f"{k}={v}" for k, v in self.lib.cookies.items()] +
+                    ["switchLanguage=zh", "siteLanguage=zh"])
 
-                response = requests.get(download_url,
-                                        headers=headers,
-                                        cookies=cookies,
-                                        stream=True,
-                                        timeout=30)
+                print(headers)
+
+                # 使用 AsyncZlib 的 cookies
+                # cookies = None
+                # if self.lib and hasattr(self.lib,
+                #                         'cookies') and self.lib.cookies:
+                #     try:
+                #         # 将 aiohttp cookies 转换为 requests 可用的格式
+                #         cookies = {}
+                #         if hasattr(self.lib.cookies, '_cookies'):
+                #             for domain_cookies in self.lib.cookies._cookies.values(
+                #             ):
+                #                 for path_cookies in domain_cookies.values():
+                #                     for cookie in path_cookies.values():
+                #                         cookies[cookie.key] = cookie.value
+                #         self.logger.info(
+                #             f"使用 AsyncZlib cookies，共 {len(cookies)} 个")
+                #     except Exception as e:
+                #         self.logger.warning(
+                #             f"获取 AsyncZlib cookies 失败: {str(e)}")
+                #         cookies = None
+
+                response = requests.get(
+                    download_url,
+                    headers=headers,
+                    # cookies=cookies,
+                    stream=True,
+                    timeout=30)
 
                 # 检查响应状态
                 if response.status_code != 200:
