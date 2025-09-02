@@ -5,11 +5,12 @@
 负责发送通知消息到飞书群聊。
 """
 
-import requests
 import json
-from typing import Dict, Any, Optional, List, Union
 import time
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
+
+import requests
 
 from utils.logger import get_logger
 

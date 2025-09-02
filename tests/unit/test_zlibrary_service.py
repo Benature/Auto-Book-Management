@@ -3,20 +3,21 @@
 Z-Library 服务模块单元测试
 """
 
-import pytest
 import os
+import sys
 import time
 from pathlib import Path
-import sys
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 FILE_DIR = Path(__file__).resolve().parent
 
 # 添加项目根目录到 Python 路径
 sys.path.insert(0, str(FILE_DIR.parents[1]))
 
-from services.zlibrary_service import ZLibraryService
 from config.config_manager import ConfigManager
+from services.zlibrary_service import ZLibraryService
 
 
 @pytest.fixture(scope="module")

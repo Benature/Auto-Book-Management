@@ -5,17 +5,18 @@
 负责爬取豆瓣「想读」书单。
 """
 
+import http.client
+import random
+import re
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
 from bs4 import BeautifulSoup
-import time
-import re
-import random
-from typing import List, Dict, Any, Optional, Tuple
-
-from utils.logger import get_logger
-from db.models import BookStatus
-import http.client
 from rich.progress import Progress
+
+from db.models import BookStatus
+from utils.logger import get_logger
 
 
 class DoubanAccessDeniedException(Exception):

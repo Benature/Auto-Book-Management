@@ -8,14 +8,15 @@
 import heapq
 import threading
 import time
-from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
+
 from sqlalchemy.orm import Session
 
-from db.models import ProcessingTask, BookStatus, DoubanBook
 from core.state_manager import BookStateManager
+from db.models import BookStatus, DoubanBook, ProcessingTask
 from utils.logger import get_logger
 
 
@@ -310,7 +311,8 @@ class TaskScheduler:
             # 更新任务状态为活跃
             self._update_task_status(task.id, TaskStatus.ACTIVE)
             
-            self.logger.info(f"开始执行任务: ID {task.id}, 书籍ID {task.book_id}, 阶段 {task.stage}")
+            self.logger.info(f"开始执行任务: ID {task.id}, 书籍ID {task.book_id}, 阶段 {task.stage}, "
+                        f"重试次数: {task.retry_count}/{task.max_retries}, 执行时间: {datetime.now().isoformat()}")
             
             # 在线程中执行任务处理器
             def run_handler():
@@ -354,8 +356,21 @@ class TaskScheduler:
         self._stats['total_retries'] += 1
         
         if task.retry_count <= task.max_retries:
-            # 重新调度任务（指数退避）
-            delay_seconds = min(300, 30 * (2 ** (task.retry_count - 1)))  # 最大5分钟
+            # 检查是否为状态不匹配错误，使用更短的重试间隔
+            is_status_mismatch = (("status_mismatch" in error_message) or
+                                 ("状态" in error_message and 
+                                  ("SEARCH_QUEUED" in error_message or 
+                                   "DOWNLOAD_QUEUED" in error_message or
+                                   "UPLOAD_QUEUED" in error_message)))
+            
+            if is_status_mismatch and task.retry_count <= 2:
+                # 状态不匹配错误使用更短的重试间隔（5-15秒）
+                delay_seconds = 5 + (task.retry_count * 5)
+                self.logger.info(f"检测到状态不匹配错误，使用短间隔重试: {delay_seconds}秒")
+            else:
+                # 其他错误使用指数退避策略
+                delay_seconds = min(300, 30 * (2 ** (task.retry_count - 1)))  # 最大5分钟
+            
             task.next_run_time = datetime.now() + timedelta(seconds=delay_seconds)
             
             # 重新加入队列

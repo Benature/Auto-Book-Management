@@ -5,15 +5,16 @@
 负责从豆瓣获取书籍详细信息。
 """
 
-import time
 import random
-from typing import Dict, Any
+import time
+from typing import Any, Dict
+
 from sqlalchemy.orm import Session
 
-from db.models import BookStatus, DoubanBook
-from core.pipeline import BaseStage, ProcessingError, NetworkError, AuthError
+from core.pipeline import AuthError, BaseStage, NetworkError, ProcessingError
 from core.state_manager import BookStateManager
-from scrapers.douban_scraper import DoubanScraper, DoubanAccessDeniedException
+from db.models import BookStatus, DoubanBook
+from scrapers.douban_scraper import DoubanAccessDeniedException, DoubanScraper
 
 
 class DataCollectionStage(BaseStage):
@@ -141,7 +142,7 @@ class DataCollectionStage(BaseStage):
         
         # 移除常见的标点符号和括号内容
         import re
-        
+
         # 移除括号及其内容
         title = re.sub(r'[（\(].*?[）\)]', '', title)
         
@@ -170,7 +171,7 @@ class DataCollectionStage(BaseStage):
         
         # 移除译者信息等
         import re
-        
+
         # 移除 [国别] 标识
         author = re.sub(r'\[.*?\]', '', author)
         

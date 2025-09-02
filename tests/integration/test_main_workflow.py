@@ -1,19 +1,20 @@
+import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
-import os
-import tempfile
-import shutil
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from config.config_manager import ConfigManager
 from db.database import Database
-from db.models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus
+from db.models import Base, BookStatus, DoubanBook, DownloadRecord, SyncTask
 from scrapers.douban_scraper import DoubanScraper
-from services.zlibrary_service import ZLibraryService
 from services.calibre_service import CalibreService
 from services.lark_service import LarkService
-from utils.logger import setup_logger, get_logger
+from services.zlibrary_service import ZLibraryService
+from utils.logger import get_logger, setup_logger
 
 
 class TestMainWorkflow(unittest.TestCase):

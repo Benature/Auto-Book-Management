@@ -4,14 +4,16 @@
 检查数据库中书籍的状态分布
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from db.database import Database
-from db.models import DoubanBook, BookStatus
 from config.config_manager import ConfigManager
+from db.database import Database
+from db.models import BookStatus, DoubanBook
 from utils.logger import get_logger
+
 
 def check_book_status():
     """检查书籍状态分布"""

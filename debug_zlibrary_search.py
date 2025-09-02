@@ -5,16 +5,17 @@
 """
 
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from utils.logger import setup_logger, get_logger
 from services.zlibrary_service import ZLibraryService
+from utils.logger import get_logger, setup_logger
+
 
 def debug_zlibrary_search():
     """调试 Z-Library 搜索结果结构"""

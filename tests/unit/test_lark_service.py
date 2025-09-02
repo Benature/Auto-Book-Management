@@ -1,8 +1,9 @@
+import json
 import unittest
 from unittest.mock import MagicMock, patch
-import json
-from services.lark_service import LarkService
+
 from config.config_manager import ConfigManager
+from services.lark_service import LarkService
 from utils.logger import get_logger
 
 

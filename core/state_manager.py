@@ -5,12 +5,13 @@
 统一管理书籍状态转换和验证。
 """
 
-from typing import Dict, List, Set, Optional, Tuple, Callable, Any
-from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
 from contextlib import contextmanager
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from db.models import BookStatus, DoubanBook, BookStatusHistory
+from sqlalchemy.orm import Session
+
+from db.models import BookStatus, BookStatusHistory, DoubanBook
 from utils.logger import get_logger
 
 
@@ -265,6 +266,9 @@ class BookStateManager:
 
                 if error_message:
                     book.error_message = error_message
+                    
+                # 确保对象被标记为dirty，强制session跟踪此对象
+                session.add(book)
 
                 # 创建状态历史记录
                 history = BookStatusHistory(book_id=book_id,
@@ -280,7 +284,8 @@ class BookStateManager:
                 # 注意：commit由上下文管理器处理
 
                 self.logger.info(
-                    f"状态转换成功: 书籍ID {book_id}, {old_status.value} -> {to_status.value}"
+                    f"状态转换成功: 书籍ID {book_id}, {old_status.value} -> {to_status.value}, "
+                    f"事务即将提交, 时间: {datetime.now().isoformat()}"
                 )
 
                 # 发送飞书通知
@@ -288,10 +293,12 @@ class BookStateManager:
                                                       to_status, change_reason,
                                                       processing_time)
 
-                # 检查是否需要调度下一个阶段的任务
-                self._schedule_next_stage_if_needed(book_id, to_status)
-
-                return True
+            # 事务提交完成后，再调度下一个阶段的任务
+            # 这确保状态更新已经完全提交到数据库
+            self.logger.debug(f"事务已提交，开始检查是否需要调度下一阶段: 书籍ID {book_id}, 当前状态: {to_status.value}")
+            self._schedule_next_stage_if_needed(book_id, to_status)
+            
+            return True
 
         except Exception as e:
             self.logger.error(f"状态转换失败: {str(e)}")
@@ -580,14 +587,33 @@ class BookStateManager:
         if current_status in next_stage_mapping:
             next_stage = next_stage_mapping[current_status]
             try:
+                # 首先转换到下一阶段的queued状态
+                next_queued_status = None
+                if next_stage == "search":
+                    next_queued_status = BookStatus.SEARCH_QUEUED
+                elif next_stage == "download":
+                    next_queued_status = BookStatus.DOWNLOAD_QUEUED
+                elif next_stage == "upload":
+                    next_queued_status = BookStatus.UPLOAD_QUEUED
+                
+                if next_queued_status:
+                    # 先转换状态，然后调度任务
+                    self.transition_status(
+                        book_id=book_id,
+                        to_status=next_queued_status,
+                        change_reason=f"准备进入{next_stage}阶段"
+                    )
+                
                 # 导入TaskPriority避免循环导入
                 from core.task_scheduler import TaskPriority
                 task_id = self.task_scheduler.schedule_task(
                     book_id=book_id,
                     stage=next_stage,
                     priority=TaskPriority.NORMAL,
-                    delay_seconds=1  # 稍微延迟确保状态更新完成
+                    delay_seconds=1  # 减少延迟，状态已经正确转换
                 )
-                self.logger.info(f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}")
+                self.logger.info(f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}, "
+                               f"状态已转换至: {next_queued_status.value if next_queued_status else '未转换'}, "
+                               f"调度时间: {datetime.now().isoformat()}")
             except Exception as e:
                 self.logger.error(f"自动调度下一阶段任务失败: {str(e)}")

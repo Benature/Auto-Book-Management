@@ -5,11 +5,11 @@
 处理数据库结构变化和数据迁移。
 """
 
-import sqlite3
-from pathlib import Path
-from typing import List, Dict, Any
 import logging
+import sqlite3
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
 from utils.logger import get_logger
 

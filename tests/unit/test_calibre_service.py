@@ -1,8 +1,10 @@
 import unittest
 from unittest.mock import MagicMock, patch
+
 import requests
-from services.calibre_service import CalibreService
+
 from config.config_manager import ConfigManager
+from services.calibre_service import CalibreService
 from utils.logger import get_logger
 
 

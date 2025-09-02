@@ -6,20 +6,21 @@
 注意：此测试需要有效的豆瓣cookie配置。
 """
 
-import pytest
 import os
 import re
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
+
+import pytest
 
 # 添加项目根目录到 Python 路径
 FILE_DIR = Path(__file__).resolve().parent
 BASE_DIR = FILE_DIR.parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
-from scrapers.douban_scraper import DoubanScraper
 from config.config_manager import ConfigManager
+from scrapers.douban_scraper import DoubanScraper
 
 
 @pytest.fixture(scope="module")

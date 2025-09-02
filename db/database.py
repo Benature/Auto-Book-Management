@@ -5,17 +5,20 @@
 提供数据库连接和操作接口。
 """
 
-from sqlalchemy import create_engine, desc
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.exc import SQLAlchemyError
-from contextlib import contextmanager
-from typing import List, Optional, Dict, Any, Generator, Tuple
 import logging
-
-from .models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus, ZLibraryBook, BookStatusHistory
-from utils.logger import get_logger
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Dict, Generator, List, Optional, Tuple
+
+from sqlalchemy import create_engine, desc
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import scoped_session, sessionmaker
+
+from utils.logger import get_logger
+
+from .models import (Base, BookStatus, BookStatusHistory, DoubanBook,
+                     DownloadRecord, SyncTask, ZLibraryBook)
 
 
 class Database:

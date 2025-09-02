@@ -14,7 +14,7 @@ sys.path.append(str(project_root))
 
 from config.config_manager import ConfigManager
 from db.database import Database
-from db.models import DoubanBook, BookStatus
+from db.models import BookStatus, DoubanBook
 from utils.logger import get_logger
 
 logger = get_logger("debug_reset")

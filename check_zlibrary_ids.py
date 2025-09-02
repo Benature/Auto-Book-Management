@@ -4,15 +4,18 @@
 检查数据库中Z-Library书籍的ID字段
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import logging
+
+from config.config_manager import ConfigManager
 from db.database import Database
 from db.models import ZLibraryBook
-from config.config_manager import ConfigManager
 from utils.logger import get_logger, setup_logger
-import logging
+
 
 def check_zlibrary_ids():
     """检查数据库中的Z-Library ID字段"""

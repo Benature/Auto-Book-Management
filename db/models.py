@@ -5,11 +5,12 @@
 定义 SQLAlchemy ORM 模型。
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, Enum, ForeignKey, Float, Boolean, JSON
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.orm import relationship
-from datetime import datetime
 import enum
+from datetime import datetime
+
+from sqlalchemy import (JSON, Boolean, Column, DateTime, Enum, Float,
+                        ForeignKey, Integer, String, Text)
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 

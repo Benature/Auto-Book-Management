@@ -6,15 +6,16 @@ Pipeline架构核心
 """
 
 import abc
-from typing import Dict, List, Optional, Any, Type
-from datetime import datetime
-from sqlalchemy.orm import Session
-from concurrent.futures import ThreadPoolExecutor, Future
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Type
 
-from db.models import BookStatus, DoubanBook, ProcessingTask
+from sqlalchemy.orm import Session
+
 from core.state_manager import BookStateManager
+from db.models import BookStatus, DoubanBook, ProcessingTask
 from utils.logger import get_logger
 
 
@@ -121,11 +122,40 @@ class BaseStage(abc.ABC):
         try:
             self.logger.info(f"开始处理书籍: {book.title} (ID: {book.id})")
 
+            # 重新获取book的最新状态确保一致性
+            # 添加小延迟确保状态更新完全提交
+            import time
+            time.sleep(0.1)
+            
+            with self.state_manager.get_session() as session:
+                fresh_book = session.query(DoubanBook).get(book.id)
+                if fresh_book:
+                    book.status = fresh_book.status
+                    book.updated_at = fresh_book.updated_at
+                    self.logger.debug(f"刷新书籍状态: {book.title}, 状态: {book.status}")
+                    
+                    # 如果状态不是预期的，再次强制刷新
+                    session.expire_all()  # 强制从数据库重新加载
+                    session.refresh(fresh_book)
+                    if fresh_book.status != book.status:
+                        book.status = fresh_book.status
+                        book.updated_at = fresh_book.updated_at
+                        self.logger.info(f"强制刷新后书籍状态: {book.title}, 状态: {book.status}")
+
             # 检查是否可以处理
             if not self.can_process(book):
-                self.logger.warning(f"无法处理书籍: {book.title}, 状态: {book.status}")
-                return False
+                error_msg = f"无法处理书籍: {book.title}, 状态: {book.status.value}"
+                self.logger.warning(error_msg)
+                # 抛出包含状态信息的异常，便于任务调度器识别状态不匹配错误
+                raise ProcessingError(error_msg, "status_mismatch", retryable=True)
 
+            # 处理状态转换逻辑（仅在特定情况下需要预转换）
+            if self.name == "search" and book.status == BookStatus.DETAIL_COMPLETE:
+                # 搜索阶段：DETAIL_COMPLETE -> SEARCH_QUEUED -> SEARCH_ACTIVE
+                self.state_manager.transition_status(book.id, BookStatus.SEARCH_QUEUED,
+                                                     "准备开始搜索")
+                book.status = BookStatus.SEARCH_QUEUED  # 同步本地状态
+            
             # 设置为active状态
             active_status = self._get_active_status()
             if active_status:

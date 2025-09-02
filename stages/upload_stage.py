@@ -6,12 +6,13 @@
 """
 
 import os
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 from sqlalchemy.orm import Session
 
-from db.models import BookStatus, DoubanBook, DownloadRecord
-from core.pipeline import BaseStage, ProcessingError, NetworkError, AuthError
+from core.pipeline import AuthError, BaseStage, NetworkError, ProcessingError
 from core.state_manager import BookStateManager
+from db.models import BookStatus, DoubanBook, DownloadRecord
 from services.calibre_service import CalibreService
 
 

@@ -1,7 +1,9 @@
-import unittest
-from unittest.mock import patch, mock_open
 import os
+import unittest
+from unittest.mock import mock_open, patch
+
 import yaml
+
 from config.config_manager import ConfigManager
 
 

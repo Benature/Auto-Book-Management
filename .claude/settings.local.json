@@ -2,9 +2,24 @@
   "permissions": {
     "allow": [
       "Bash(PYTHONPATH=. python:*)",
-      "Bash(timeout 30 python main_v2.py --debug -o)"
+      "Bash(timeout 30 python main_v2.py --debug -o)",
+      "Bash(timeout 60 python main.py --debug -o)",
+      "Bash(timeout:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(source:*)",
+      "Bash(uv add:*)",
+      "Bash(uv pip install:*)",
+      "Bash(yapf:*)",
+      "Bash(isort:*)",
+      "Bash(flake8:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(sqlite3:*)"
     ],
-    "deny": [],
+    "deny": [
+      "Read(config.yaml)"
+    ],
     "ask": []
   }
 }

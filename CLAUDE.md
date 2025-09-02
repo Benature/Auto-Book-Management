@@ -13,7 +13,7 @@
 - **Run with coverage**: `pytest --cov=. tests/`
 
 ### Code Quality
-- **Format code**: `black .` (auto-format all Python files)
+- **Format code**: `yapf -r -i .` (auto-format all Python files)
 - **Sort imports**: `isort .` (organize import statements)
 - **Lint code**: `flake8 .` (check code style and potential issues)
 - **Type checking**: `mypy .` (static type analysis)
@@ -139,3 +139,4 @@ The `config.yaml` requires:
 - `pytest`: Testing framework with coverage and mocking
 
 少用try
+- 使用uv命令

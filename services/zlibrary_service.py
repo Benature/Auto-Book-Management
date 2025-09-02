@@ -9,23 +9,23 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-import os
-import time
-import random
-import json
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
 import asyncio
-import traceback
-import requests
-
-import zlibrary
 import difflib
+import json
+import os
+import random
 import re
+import time
+import traceback
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+import requests
+import zlibrary
+
+from core.pipeline import NetworkError, ProcessingError, ResourceNotFoundError
 from utils.logger import get_logger
-from core.pipeline import ProcessingError, NetworkError, ResourceNotFoundError
 
 
 class ZLibrarySearchService:
@@ -206,7 +206,10 @@ class ZLibrarySearchService:
 
         books_info = []
         for res in paginator.result:
+            zlib_id = res.get('id')
             _book = await res.fetch()
+            if 'id' not in _book:
+                _book['id'] = zlib_id
             books_info.append(_book)
         return books_info
 

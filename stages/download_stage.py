@@ -6,13 +6,16 @@
 """
 
 import os
-from typing import Dict, Any, Optional
 from pathlib import Path
+from typing import Any, Dict, Optional
+
 from sqlalchemy.orm import Session
 
-from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadRecord, DownloadQueue
-from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
+from core.pipeline import (BaseStage, NetworkError, ProcessingError,
+                           ResourceNotFoundError)
 from core.state_manager import BookStateManager
+from db.models import (BookStatus, DoubanBook, DownloadQueue, DownloadRecord,
+                       ZLibraryBook)
 from services.zlibrary_service import ZLibraryService
 
 
@@ -50,17 +53,32 @@ class DownloadStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        # 检查书籍状态和下载队列中是否有待处理项
-        if book.status not in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]:
-            return False
-            
-        # 检查下载队列中是否有该书籍的待处理项
         with self.state_manager.get_session() as session:
+            # 重新查询数据库获取最新状态，避免使用缓存的book对象
+            fresh_book = session.query(DoubanBook).get(book.id)
+            if not fresh_book:
+                self.logger.warning(f"无法找到书籍: ID {book.id}")
+                return False
+            
+            current_status = fresh_book.status
+            self.logger.info(f"检查书籍处理能力: {book.title}, 数据库状态: {current_status.value}, 传入状态: {book.status.value}")
+            
+            # 检查书籍状态是否符合处理条件
+            # 只有DOWNLOAD_QUEUED状态的书籍才能被下载阶段处理
+            if current_status != BookStatus.DOWNLOAD_QUEUED:
+                self.logger.warning(f"无法处理书籍: {book.title}, 状态: {current_status.value}")
+                return False
+                
+            # 检查下载队列中是否有该书籍的待处理项
             queue_item = session.query(DownloadQueue).filter(
                 DownloadQueue.douban_book_id == book.id,
                 DownloadQueue.status == 'queued'
             ).first()
-            return queue_item is not None
+            
+            has_queued_item = queue_item is not None
+            self.logger.info(f"下载队列检查: {book.title}, 队列中有待处理项: {has_queued_item}")
+            
+            return has_queued_item
     
     def process(self, book: DoubanBook) -> bool:
         """

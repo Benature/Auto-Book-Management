@@ -3,20 +3,21 @@
 豆瓣爬虫模块单元测试
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import json
 import os
 import re
-from pathlib import Path
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # 添加项目根目录到 Python 路径
 FILE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(FILE_DIR.parent.parent))
 
-from scrapers.douban_scraper import DoubanScraper
 from config.config_manager import ConfigManager
+from scrapers.douban_scraper import DoubanScraper
 
 
 @pytest.fixture(scope="module")

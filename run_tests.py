@@ -9,11 +9,10 @@
     python run_tests.py integration  # 只运行集成测试
 """
 
-from pathlib import Path
-
-import unittest
-import sys
 import os
+import sys
+import unittest
+from pathlib import Path
 
 
 def run_all_tests():

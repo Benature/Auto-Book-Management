@@ -8,17 +8,17 @@
     python tests/unit/run_real_test.py --book-id 26912767
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
 FILE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(FILE_DIR.parent.parent))
 
-from scrapers.douban_scraper import DoubanScraper
 from config.config_manager import ConfigManager
+from scrapers.douban_scraper import DoubanScraper
 
 
 def run_real_test(book_id=None):

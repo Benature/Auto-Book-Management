@@ -1,13 +1,14 @@
-import unittest
-from unittest.mock import MagicMock, patch
 import os
 import tempfile
+import unittest
+from unittest.mock import MagicMock, patch
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from db.database import Database
-from db.models import Base, DoubanBook, DownloadRecord, SyncTask, BookStatus
 from config.config_manager import ConfigManager
+from db.database import Database
+from db.models import Base, BookStatus, DoubanBook, DownloadRecord, SyncTask
 from utils.logger import get_logger
 
 

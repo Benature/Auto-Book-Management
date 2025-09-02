@@ -1,8 +1,10 @@
-import unittest
-from unittest.mock import MagicMock, patch
 import time
+import unittest
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+
 from scheduler.task_scheduler import TaskScheduler
+
 from config.config_manager import ConfigManager
 from utils.logger import get_logger
 

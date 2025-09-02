@@ -6,14 +6,15 @@
 该脚本用于安装项目依赖和初始化数据库
 """
 
-import os
-import sys
-import subprocess
 import argparse
+import os
+import shutil
+import subprocess
+import sys
+
+import yaml
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
-import yaml
-import shutil
 
 
 def check_python_version():

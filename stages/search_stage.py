@@ -5,11 +5,12 @@
 负责在Z-Library中搜索书籍并保存结果。
 """
 
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 
-from db.models import BookStatus, DoubanBook, ZLibraryBook, DownloadQueue
-from core.pipeline import BaseStage, ProcessingError, NetworkError, ResourceNotFoundError
+from core.pipeline import (BaseStage, NetworkError, ProcessingError,
+                           ResourceNotFoundError)
 from core.state_manager import BookStateManager
+from db.models import BookStatus, DoubanBook, DownloadQueue, ZLibraryBook
 from services.zlibrary_service import ZLibraryService
 
 
@@ -30,10 +31,12 @@ class SearchStage(BaseStage):
         super().__init__("search", state_manager)
         self.zlibrary_service = zlibrary_service
         self.min_match_score = min_match_score
+        # 跟踪当前处理是否找到符合阈值的结果
+        self._found_qualifying_results = False
 
     def can_process(self, book: DoubanBook) -> bool:
         """
-        检查是否可以处理该书籍，并进行必要的状态预处理
+        检查是否可以处理该书籍
         
         Args:
             book: 书籍对象
@@ -41,15 +44,10 @@ class SearchStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        # 如果是DETAIL_COMPLETE状态，先转换为SEARCH_QUEUED
-        if book.status == BookStatus.DETAIL_COMPLETE:
-            self.state_manager.transition_status(book.id,
-                                                 BookStatus.SEARCH_QUEUED,
-                                                 "准备开始搜索")
-            # 刷新book对象状态
-            book.status = BookStatus.SEARCH_QUEUED
-        self.logger.info(f"处理书籍: {book.title} {book.status}")
-        return book.status == BookStatus.SEARCH_QUEUED
+        # 接受DETAIL_COMPLETE和SEARCH_QUEUED状态的书籍
+        can_process = book.status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED]
+        self.logger.info(f"处理书籍: {book.title}, 状态: {book.status}, 可处理: {can_process}")
+        return can_process
 
     def process(self, book: DoubanBook) -> bool:
         """
@@ -61,6 +59,8 @@ class SearchStage(BaseStage):
         Returns:
             bool: 处理是否成功
         """
+        # 重置标志位
+        self._found_qualifying_results = False
         try:
             self.logger.info(f"搜索Z-Library: {book.title}")
 
@@ -91,6 +91,18 @@ class SearchStage(BaseStage):
                 raise ProcessingError(f"未能保存搜索结果: {book.title}")
 
             self.logger.info(f"成功搜索并保存 {saved_count} 个结果: {book.title}")
+            
+            # 检查是否有符合阈值的结果并成功添加到下载队列
+            queue_added = self._add_best_match_to_queue(book)
+            
+            # 设置标志位，用于决定下一状态
+            self._found_qualifying_results = queue_added
+            
+            if not queue_added:
+                self.logger.warning(f"没有符合最低匹配分数({self.min_match_score})的搜索结果: {book.title}")
+            
+            # 始终返回True，让任务调度器认为处理成功
+            # 实际的下一状态由get_next_status根据_found_qualifying_results决定
             return True
 
         except ResourceNotFoundError:
@@ -134,7 +146,11 @@ class SearchStage(BaseStage):
             BookStatus: 下一状态
         """
         if success:
-            return BookStatus.SEARCH_COMPLETE
+            # 根据是否找到符合阈值的结果决定状态
+            if self._found_qualifying_results:
+                return BookStatus.SEARCH_COMPLETE
+            else:
+                return BookStatus.SEARCH_NO_RESULTS
         else:
             return BookStatus.SEARCH_NO_RESULTS
 
@@ -155,12 +171,18 @@ class SearchStage(BaseStage):
         try:
             with self.state_manager.get_session() as session:
                 for result in search_results:
+                    zlibrary_id = result.get('zlibrary_id', '')
+                    if not zlibrary_id:
+                        self.logger.warning(f"搜索结果缺少zlibrary_id，跳过: {result.get('title', 'Unknown')}")
+                        continue
+                    
                     # 检查是否已存在
                     existing = session.query(ZLibraryBook).filter(
-                        ZLibraryBook.zlibrary_id == result.get('zlibrary_id'),
+                        ZLibraryBook.zlibrary_id == zlibrary_id,
                         ZLibraryBook.douban_id == book.douban_id).first()
 
                     if existing:
+                        self.logger.debug(f"Z-Library书籍已存在，跳过: {zlibrary_id} for {book.douban_id}")
                         continue
 
                     # 计算匹配度得分
@@ -205,8 +227,6 @@ class SearchStage(BaseStage):
                 # session的commit在get_session上下文管理器中自动处理
                 if saved_count > 0:
                     self.logger.info(f"保存了 {saved_count} 个Z-Library搜索结果")
-                    # 搜索完成后，选择最佳匹配并添加到下载队列
-                    self._add_best_match_to_queue(book)
 
             return saved_count
 
@@ -237,7 +257,7 @@ class SearchStage(BaseStage):
                 # 获取所有搜索结果，按匹配分数降序排列
                 zlibrary_books = session.query(ZLibraryBook).filter(
                     ZLibraryBook.douban_id == book.douban_id,
-                    ZLibraryBook.is_available == True,
+                    ZLibraryBook.is_available.is_(True),
                     ZLibraryBook.match_score >= self.min_match_score
                 ).order_by(ZLibraryBook.match_score.desc()).all()
                 

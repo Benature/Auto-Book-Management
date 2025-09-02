@@ -6,41 +6,37 @@
 使用Pipeline架构实现分阶段处理的书籍同步工具。
 """
 
+import argparse
 import os
 import sys
-import argparse
-import time
 import threading
-from pathlib import Path
-from typing import Dict, Any, List
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
 # 导入版本信息
 from __version__ import __version__, get_version_info
-
 # 导入项目模块
 from config.config_manager import ConfigManager
-from utils.logger import setup_logger, get_logger
-from db.database import Database
-from db.models import BookStatus, DoubanBook
-
+from core.error_handler import ErrorHandler
+from core.pipeline import PipelineManager
 # 导入新架构组件
 from core.state_manager import BookStateManager
-from core.pipeline import PipelineManager
-from core.task_scheduler import TaskScheduler, TaskPriority, ScheduledTask
-from core.error_handler import ErrorHandler
-
-# 导入处理阶段
-from stages.data_collection_stage import DataCollectionStage
-from stages.search_stage import SearchStage
-from stages.download_stage import DownloadStage
-from stages.upload_stage import UploadStage
-
+from core.task_scheduler import ScheduledTask, TaskPriority, TaskScheduler
+from db.database import Database
+from db.models import BookStatus, DoubanBook
 # 导入服务
-from scrapers.douban_scraper import DoubanScraper, DoubanAccessDeniedException
-from services.zlibrary_service import ZLibraryService
+from scrapers.douban_scraper import DoubanAccessDeniedException, DoubanScraper
 from services.calibre_service import CalibreService
 from services.lark_service import LarkService
+from services.zlibrary_service import ZLibraryService
+# 导入处理阶段
+from stages.data_collection_stage import DataCollectionStage
+from stages.download_stage import DownloadStage
+from stages.search_stage import SearchStage
+from stages.upload_stage import UploadStage
+from utils.logger import get_logger, setup_logger
 
 
 class DoubanZLibraryCalibrer:
