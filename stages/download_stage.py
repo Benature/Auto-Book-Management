@@ -9,8 +9,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from sqlalchemy.orm import Session
-
 from core.pipeline import (BaseStage, NetworkError, ProcessingError,
                            ResourceNotFoundError)
 from core.state_manager import BookStateManager
@@ -263,6 +261,9 @@ class DownloadStage(BaseStage):
                 'title': queue_item_data['title'] or book.title,
                 'authors': queue_item_data['authors'] or book.author,
                 'extension': queue_item_data['extension'],
+                'download_url': queue_item_data['download_url'],
+                'url': queue_item_data.get('url', ''),  # 备用URL
+                'size': queue_item_data.get('size', ''),
                 'douban_id': book.douban_id
             }
             

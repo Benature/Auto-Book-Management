@@ -145,7 +145,7 @@ class ZLibrarySearchService:
                     self.consecutive_errors = 0  # 重置错误计数
                     return results
 
-            except NetworkError as e:
+            except (NetworkError, asyncio.TimeoutError) as e:
                 # 网络错误，记录但继续尝试其他策略
                 last_network_error = e
                 self.logger.error(f"策略 {strategy['priority']} 网络错误: {str(e)}")
@@ -211,6 +211,8 @@ class ZLibrarySearchService:
             if 'id' not in _book:
                 _book['id'] = zlib_id
             books_info.append(_book)
+            # # TODO:
+            # return books_info
         return books_info
 
     def _execute_search_strategy(
@@ -605,10 +607,10 @@ class ZLibraryDownloadService:
                 headers = {
                     'User-Agent':
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Referer':
-                    'https://z-library.sk/',
-                    'Accept':
-                    'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+                    # 'Referer':
+                    # 'https://z-library.sk/',
+                    # 'Accept':
+                    # 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
                 }
 
                 self.logger.info(f"使用链接下载: {download_url}")
