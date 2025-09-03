@@ -17,7 +17,9 @@
       "Bash(grep:*)",
       "Bash(sqlite3:*)",
       "Bash(calibredb list:*)",
-      "Bash(uv list:*)"
+      "Bash(uv list:*)",
+      "Bash(uv pip:*)",
+      "Bash(pytest:*)"
     ],
     "deny": [
       "Read(config.yaml)"

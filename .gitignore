@@ -7,3 +7,5 @@ test*
 logs/
 *.db.backup*
 data/downloads/
+
+.venv

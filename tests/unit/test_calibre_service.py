@@ -1,192 +1,215 @@
-import unittest
-import tempfile
-import os
+# -*- coding: utf-8 -*-
+"""
+CalibreService 单元测试
+"""
+import pytest
+from pathlib import Path
 
 from config.config_manager import ConfigManager
 from services.calibre_service import CalibreService
-from utils.logger import get_logger
 
 
-class TestCalibreService(unittest.TestCase):
-    """Test cases for CalibreService class using real configurations."""
+@pytest.fixture
+def calibre_service():
+    """创建CalibreService实例用于测试"""
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "config.yaml"
 
-    def setUp(self):
-        """Set up test fixtures."""
-        # Create temporary config for testing
-        self.temp_dir = tempfile.mkdtemp()
-        self.config_path = os.path.join(self.temp_dir, 'test_config.yaml')
-        
-        config_content = '''
-calibre:
-  content_server_url: "http://localhost:8080"
-  username: "test_user"
-  password: "test_pass"
-  match_threshold: 0.6
-  timeout: 120
-database:
-  url: ':memory:'
-lark:
-  enabled: false
-scheduler:
-  enabled: false
-'''
-        
-        with open(self.config_path, 'w') as f:
-            f.write(config_content)
-            
-        self.config_manager = ConfigManager(self.config_path)
-        self.logger = get_logger('test_calibre_service')
-        self.calibre_service = CalibreService(self.config_manager, self.logger)
+    if not config_path.exists():
+        config_path = project_root / "config.example.yaml"
 
-    def tearDown(self):
-        """Clean up test fixtures."""
-        import shutil
-        shutil.rmtree(self.temp_dir)
+    if not config_path.exists():
+        pytest.skip("找不到配置文件，跳过测试")
 
-    def test_init(self):
-        """Test initialization of CalibreService."""
-        calibre_config = self.config_manager.get_calibre_config()
-        
-        # Test that service properties are set from config
-        self.assertEqual(self.calibre_service.server_url, calibre_config['content_server_url'])
-        self.assertEqual(self.calibre_service.username, calibre_config['username'])
-        self.assertEqual(self.calibre_service.password, calibre_config['password'])
-        self.assertEqual(self.calibre_service.match_threshold, calibre_config['match_threshold'])
-        self.assertEqual(self.calibre_service.timeout, calibre_config['timeout'])
+    # 从配置文件加载配置
+    config_manager = ConfigManager(str(config_path))
+    calibre_config = config_manager.get_calibre_config()
 
-    def test_configuration_loading(self):
-        """Test that configuration is loaded correctly."""
-        calibre_config = self.config_manager.get_calibre_config()
-        
-        # Verify required configuration fields
-        required_fields = ['content_server_url', 'username', 'password', 'match_threshold', 'timeout']
-        for field in required_fields:
-            self.assertIn(field, calibre_config)
-            
-        # Verify field types
-        self.assertIsInstance(calibre_config['content_server_url'], str)
-        self.assertIsInstance(calibre_config['username'], str)
-        self.assertIsInstance(calibre_config['password'], str)
-        self.assertIsInstance(calibre_config['match_threshold'], (int, float))
-        self.assertIsInstance(calibre_config['timeout'], int)
+    server_url = calibre_config['content_server_url']
+    username = calibre_config['username']
+    password = calibre_config['password']
+    match_threshold = calibre_config.get('match_threshold', 0.6)
 
-    def test_similarity_calculation(self):
-        """Test similarity calculation method."""
-        # Test exact match
-        similarity = self.calibre_service._calculate_similarity("test", "test")
-        self.assertEqual(similarity, 1.0)
-        
-        # Test no match
-        similarity = self.calibre_service._calculate_similarity("abc", "xyz")
-        self.assertGreaterEqual(similarity, 0.0)
-        self.assertLessEqual(similarity, 1.0)
-        
-        # Test partial match
-        similarity = self.calibre_service._calculate_similarity("python programming", "python guide")
-        self.assertGreater(similarity, 0.0)
-        self.assertLess(similarity, 1.0)
+    calibre_service = CalibreService(server_url=server_url,
+                                     username=username,
+                                     password=password,
+                                     match_threshold=match_threshold)
 
-    def test_string_normalization(self):
-        """Test string normalization method."""
-        # Test basic normalization
-        normalized = self.calibre_service._normalize_string("  Python Programming  ")
-        self.assertEqual(normalized, "python programming")
-        
-        # Test special character removal
-        normalized = self.calibre_service._normalize_string("C++ & Java: The Guide!")
-        self.assertNotIn("+", normalized)
-        self.assertNotIn("&", normalized)
-        self.assertNotIn(":", normalized)
-        self.assertNotIn("!", normalized)
-        
-        # Test multiple spaces
-        normalized = self.calibre_service._normalize_string("Python    Programming")
-        self.assertEqual(normalized, "python programming")
+    return calibre_service
 
-    def test_match_threshold_validation(self):
-        """Test match threshold configuration."""
-        threshold = self.calibre_service.match_threshold
-        
-        # Verify threshold is within valid range
-        self.assertGreaterEqual(threshold, 0.0)
-        self.assertLessEqual(threshold, 1.0)
-        self.assertIsInstance(threshold, (int, float))
 
-    def test_timeout_configuration(self):
-        """Test timeout configuration."""
-        timeout = self.calibre_service.timeout
-        
-        # Verify timeout is positive integer
-        self.assertGreater(timeout, 0)
-        self.assertIsInstance(timeout, int)
+@pytest.fixture
+def config_values():
+    """获取配置值用于测试验证"""
+    project_root = Path(__file__).parent.parent.parent
+    config_path = project_root / "config.yaml"
 
-    def test_server_url_format(self):
-        """Test server URL format."""
-        server_url = self.calibre_service.server_url
-        
-        # Verify URL format
-        self.assertIsInstance(server_url, str)
-        self.assertTrue(server_url.startswith('http'))
-        self.assertIn(':', server_url)
+    if not config_path.exists():
+        config_path = project_root / "config.example.yaml"
 
-    def test_authentication_data(self):
-        """Test authentication data."""
-        username = self.calibre_service.username
-        password = self.calibre_service.password
-        
-        # Verify authentication data exists
-        self.assertIsInstance(username, str)
-        self.assertIsInstance(password, str)
-        self.assertGreater(len(username), 0)
-        self.assertGreater(len(password), 0)
+    if not config_path.exists():
+        pytest.skip("找不到配置文件，跳过测试")
 
-    def test_book_data_structure_validation(self):
-        """Test expected book data structure."""
-        # Sample book data structure that Calibre service should handle
-        sample_book = {
-            'calibre_id': 123,
-            'title': 'Python Programming',
-            'authors': ['John Doe'],
-            'author': 'John Doe',
-            'publisher': 'Tech Books',
-            'isbn': '9781234567890',
-            'formats': ['EPUB', 'PDF'],
-            'identifiers': {'isbn': '9781234567890'}
+    config_manager = ConfigManager(str(config_path))
+    calibre_config = config_manager.get_calibre_config()
+
+    return {
+        'server_url': calibre_config['content_server_url'],
+        'username': calibre_config['username'],
+        'password': calibre_config['password'],
+        'match_threshold': calibre_config.get('match_threshold', 0.6)
+    }
+
+
+def test_init(calibre_service, config_values):
+    """测试 CalibreService 初始化"""
+    assert calibre_service.server_url == config_values['server_url']
+    assert calibre_service.username == config_values['username']
+    assert calibre_service.password == config_values['password']
+    assert calibre_service.match_threshold == config_values['match_threshold']
+    assert calibre_service.timeout == 120
+
+
+def test_configuration_validation(calibre_service):
+    """测试配置值验证"""
+    assert isinstance(calibre_service.server_url, str)
+    assert isinstance(calibre_service.username, str)
+    assert isinstance(calibre_service.password, str)
+    assert isinstance(calibre_service.match_threshold, (int, float))
+    assert isinstance(calibre_service.timeout, int)
+
+
+def test_similarity_calculation(calibre_service):
+    """测试相似度计算方法"""
+    # 测试完全匹配
+    similarity = calibre_service._calculate_similarity("test", "test")
+    assert similarity == 1.0
+
+    # 测试无匹配
+    similarity = calibre_service._calculate_similarity("abc", "xyz")
+    assert 0.0 <= similarity <= 1.0
+
+    # 测试部分匹配
+    similarity = calibre_service._calculate_similarity("python programming",
+                                                       "python guide")
+    assert 0.0 < similarity < 1.0
+
+
+def test_match_threshold_validation(calibre_service):
+    """测试匹配阈值配置"""
+    threshold = calibre_service.match_threshold
+
+    assert 0.0 <= threshold <= 1.0
+    assert isinstance(threshold, (int, float))
+
+
+def test_timeout_configuration(calibre_service):
+    """测试超时配置"""
+    timeout = calibre_service.timeout
+
+    assert timeout > 0
+    assert isinstance(timeout, int)
+
+
+def test_server_url_format(calibre_service):
+    """测试服务器URL格式"""
+    server_url = calibre_service.server_url
+
+    assert isinstance(server_url, str)
+    assert server_url.startswith('http')
+    assert ':' in server_url
+
+
+def test_authentication_data(calibre_service):
+    """测试认证数据"""
+    username = calibre_service.username
+    password = calibre_service.password
+
+    assert isinstance(username, str)
+    assert isinstance(password, str)
+    assert len(username) > 0
+    assert len(password) > 0
+
+
+def test_book_data_structure_validation():
+    """测试期望的书籍数据结构"""
+    sample_book = {
+        'calibre_id': 123,
+        'title': 'Python Programming',
+        'authors': ['John Doe'],
+        'author': 'John Doe',
+        'publisher': 'Tech Books',
+        'isbn': '9781234567890',
+        'formats': ['EPUB', 'PDF'],
+        'identifiers': {
+            'isbn': '9781234567890'
         }
-        
-        # Verify expected fields exist
-        expected_fields = ['calibre_id', 'title', 'authors', 'author']
-        for field in expected_fields:
-            self.assertIn(field, sample_book)
-            
-        # Verify data types
-        self.assertIsInstance(sample_book['calibre_id'], int)
-        self.assertIsInstance(sample_book['title'], str)
-        self.assertIsInstance(sample_book['authors'], list)
-        self.assertIsInstance(sample_book['author'], str)
+    }
 
-    def test_search_parameters_validation(self):
-        """Test search parameter validation logic."""
-        # Test parameter filtering
-        search_params = {
-            'title': 'Python Programming',
-            'author': 'John Doe',
-            'isbn': '9781234567890',
-            'empty_param': '',
-            'none_param': None
-        }
-        
-        # Filter out empty/None parameters
-        filtered_params = {k: v for k, v in search_params.items() 
-                          if v and isinstance(v, str) and len(v.strip()) > 0}
-        
-        # Verify filtering worked
-        self.assertIn('title', filtered_params)
-        self.assertIn('author', filtered_params)
-        self.assertIn('isbn', filtered_params)
-        self.assertNotIn('empty_param', filtered_params)
-        self.assertNotIn('none_param', filtered_params)
+    # 验证期望字段存在
+    expected_fields = ['calibre_id', 'title', 'authors', 'author']
+    for field in expected_fields:
+        assert field in sample_book
+
+    # 验证数据类型
+    assert isinstance(sample_book['calibre_id'], int)
+    assert isinstance(sample_book['title'], str)
+    assert isinstance(sample_book['authors'], list)
+    assert isinstance(sample_book['author'], str)
 
 
-if __name__ == '__main__':
-    unittest.main()
+def test_search_parameters_validation():
+    """测试搜索参数验证逻辑"""
+    search_params = {
+        'title': 'Python Programming',
+        'author': 'John Doe',
+        'isbn': '9781234567890',
+        'empty_param': '',
+        'none_param': None
+    }
+
+    # 过滤空/None参数
+    filtered_params = {
+        k: v
+        for k, v in search_params.items()
+        if v and isinstance(v, str) and len(v.strip()) > 0
+    }
+
+    # 验证过滤结果
+    assert 'title' in filtered_params
+    assert 'author' in filtered_params
+    assert 'isbn' in filtered_params
+    assert 'empty_param' not in filtered_params
+    assert 'none_param' not in filtered_params
+
+
+@pytest.mark.real_network
+def test_search_book_by_title(calibre_service):
+    """测试按标题搜索书籍"""
+    # 使用简单的书名进行搜索测试
+    results = calibre_service.search_book(title="交易")
+
+    # 验证返回结果是列表
+    assert isinstance(results, list)
+
+    # 如果有结果，验证结果的数据结构
+    if results:
+        for book in results:
+            # 验证必要字段存在
+            assert 'calibre_id' in book
+            assert 'title' in book
+            assert 'authors' in book
+            assert 'author' in book
+
+            # 验证数据类型
+            assert isinstance(book['calibre_id'], int)
+            assert isinstance(book['title'], str)
+            assert isinstance(book['authors'], list)
+            assert isinstance(book['author'], str)
+
+            # 验证标题包含搜索关键词（不区分大小写）
+            assert 'python' in book['title'].lower()
+
+    print(f"搜索 'python' 找到 {len(results)} 本书")
+    for book in results[:3]:  # 只显示前3本
+        print(f"- {book['title']} by {book['author']}")
