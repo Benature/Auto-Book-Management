@@ -1,7 +1,6 @@
 import os
 import tempfile
 import unittest
-from unittest.mock import MagicMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -23,18 +22,29 @@ class TestDatabase(unittest.TestCase):
         self.temp_db_file.close()
         self.db_url = f'sqlite:///{self.temp_db_file.name}'
 
-        # Mock config manager
-        self.config_mock = MagicMock(spec=ConfigManager)
-        self.config_mock.get_database_config.return_value = {
-            'url': self.db_url,
-            'echo': False
-        }
-
-        # Mock logger
-        self.logger_mock = MagicMock(spec=get_logger)
+        # Create a temporary config file for testing
+        self.temp_config_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.temp_config_dir, 'test_config.yaml')
+        
+        # Create test config content
+        config_content = f'''
+database:
+  url: '{self.db_url}'
+  echo: false
+lark:
+  enabled: false
+scheduler:
+  enabled: false
+'''
+        with open(self.config_path, 'w') as f:
+            f.write(config_content)
+            
+        # Use real config manager and logger
+        self.config_manager = ConfigManager(self.config_path)
+        self.logger = get_logger('test_database')
 
         # Create database instance
-        self.database = Database(self.config_mock, self.logger_mock)
+        self.database = Database(self.config_manager, self.logger)
 
         # Create tables
         Base.metadata.create_all(self.database.engine)
@@ -49,6 +59,11 @@ class TestDatabase(unittest.TestCase):
         if hasattr(self, 'temp_db_file') and os.path.exists(
                 self.temp_db_file.name):
             os.unlink(self.temp_db_file.name)
+            
+        # Remove temporary config directory
+        if hasattr(self, 'temp_config_dir'):
+            import shutil
+            shutil.rmtree(self.temp_config_dir)
 
     def test_init(self):
         """Test initialization of Database."""

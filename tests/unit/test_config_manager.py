@@ -1,6 +1,6 @@
 import os
+import tempfile
 import unittest
-from unittest.mock import mock_open, patch
 
 import yaml
 
@@ -48,284 +48,166 @@ class TestConfigManager(unittest.TestCase):
                 'webhook_url': 'https://open.feishu.cn/webhook/test',
                 'secret': 'test_secret'
             },
-            'logging': {
-                'level': 'INFO',
-                'file': 'logs/app.log',
-                'max_size_mb': 10,
-                'backup_count': 5
-            },
-            'system': {
-                'temp_dir': '/tmp/temp',
+            'settings': {
+                'download_timeout': 300,
                 'max_retries': 3,
                 'retry_delay': 5
             }
         }
 
-        # Convert to YAML string for mocking file reads
-        self.yaml_content = yaml.dump(self.test_config)
+        # Create temporary config file for testing
+        self.temp_dir = tempfile.mkdtemp()
+        self.test_config_path = os.path.join(self.temp_dir, 'test_config.yaml')
+        
+        # Write test config to temporary file
+        with open(self.test_config_path, 'w') as f:
+            yaml.dump(self.test_config, f, default_flow_style=False)
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_load_config(self, mock_yaml_load, mock_exists, mock_file):
+    def test_load_config(self):
         """Test loading configuration from file."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+        # Create config manager and test initialization loads config
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config = config_manager.load_config()
+        # Verify config was loaded correctly
+        self.assertEqual(config_manager.config, self.test_config)
 
-        # Verify
-        self.assertEqual(config, self.test_config)
-        mock_exists.assert_called_once_with('config.yaml')
-        mock_file.assert_called_once_with('config.yaml', 'r', encoding='utf-8')
-        mock_yaml_load.assert_called_once()
-
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    def test_load_config_file_not_found(self, mock_exists, mock_file):
-        """Test handling of missing configuration file."""
-        # Setup mocks
-        mock_exists.return_value = False
-
-        # Create config manager and try to load config
-        config_manager = ConfigManager('config.yaml')
+    def test_load_config_file_not_found(self):
+        """Test loading config when file doesn't exist."""
+        # Test and verify exception
         with self.assertRaises(FileNotFoundError):
-            config_manager.load_config()
+            ConfigManager('nonexistent.yaml')
 
-        # Verify
-        mock_exists.assert_called_once_with('config.yaml')
-        mock_file.assert_not_called()
-
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_validate_config_valid(self, mock_yaml_load, mock_exists,
-                                   mock_file):
+    def test_validate_config_valid(self):
         """Test validation of a valid configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+        # Create config manager
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
+        # Validate config - should not raise exception
+        config_manager._validate_config()
 
-        # Validate config
-        try:
-            config_manager.validate_config()
-            validation_passed = True
-        except Exception:
-            validation_passed = False
+        # Verify all required sections exist
+        self.assertIn('douban', config_manager.config)
+        self.assertIn('database', config_manager.config)
+        self.assertIn('calibre', config_manager.config)
+        self.assertIn('zlibrary', config_manager.config)
+        self.assertIn('scheduler', config_manager.config)
+        self.assertIn('lark', config_manager.config)
 
-        # Verify
-        self.assertTrue(validation_passed)
-
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_validate_config_missing_section(self, mock_yaml_load, mock_exists,
-                                             mock_file):
-        """Test validation with a missing required section."""
-        # Setup mocks
+    def test_validate_config_missing_section(self):
+        """Test validation with missing required section."""
+        # Create invalid config file
         invalid_config = self.test_config.copy()
         del invalid_config['douban']  # Remove required section
+        
+        invalid_config_path = os.path.join(self.temp_dir, 'invalid_config.yaml')
+        with open(invalid_config_path, 'w') as f:
+            yaml.dump(invalid_config, f, default_flow_style=False)
 
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = invalid_config
-        mock_file.return_value.__enter__.return_value.read.return_value = yaml.dump(
-            invalid_config)
+        # Test - should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            config_manager = ConfigManager(invalid_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
+        self.assertIn('Missing required configuration section: douban',
+                      str(context.exception))
 
-        # Validate config
-        with self.assertRaises(ValueError):
-            config_manager.validate_config()
+    def test_get_douban_config(self):
+        """Test getting douban configuration."""
+        config_manager = ConfigManager(self.test_config_path)
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_douban_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting Douban configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
-
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get Douban config
+        # Test
         douban_config = config_manager.get_douban_config()
 
         # Verify
-        self.assertEqual(douban_config, self.test_config['douban'])
         self.assertEqual(douban_config['user_id'], 'test_user')
         self.assertEqual(douban_config['cookie'], 'test_cookie')
+        self.assertEqual(douban_config['user_agent'], 'test_agent')
+        self.assertEqual(
+            douban_config['wishlist_url'],
+            'https://book.douban.com/people/{user_id}/wish')
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_database_config(self, mock_yaml_load, mock_exists, mock_file):
+    def test_get_database_config(self):
         """Test getting database configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get database config
-        db_config = config_manager.get_database_config()
+        # Test
+        database_config = config_manager.get_database_config()
 
         # Verify
-        self.assertEqual(db_config, self.test_config['database'])
-        self.assertEqual(db_config['url'], 'sqlite:///test.db')
-        self.assertEqual(db_config['echo'], False)
+        self.assertEqual(database_config['url'], 'sqlite:///test.db')
+        self.assertEqual(database_config['echo'], False)
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_calibre_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting Calibre configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+    def test_get_calibre_config(self):
+        """Test getting calibre configuration."""
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get Calibre config
+        # Test
         calibre_config = config_manager.get_calibre_config()
 
         # Verify
-        self.assertEqual(calibre_config, self.test_config['calibre'])
         self.assertEqual(calibre_config['host'], 'http://localhost')
         self.assertEqual(calibre_config['port'], 8080)
+        self.assertEqual(calibre_config['username'], 'test_user')
+        self.assertEqual(calibre_config['password'], 'test_pass')
+        self.assertEqual(calibre_config['library'], 'test_library')
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_zlibrary_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting Z-Library configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+    def test_get_zlibrary_config(self):
+        """Test getting zlibrary configuration."""
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get Z-Library config
-        zlib_config = config_manager.get_zlibrary_config()
+        # Test
+        zlibrary_config = config_manager.get_zlibrary_config()
 
         # Verify
-        self.assertEqual(zlib_config, self.test_config['zlibrary'])
-        self.assertEqual(zlib_config['base_url'], 'https://zlibrary.example')
-        self.assertEqual(zlib_config['format_priority'],
+        self.assertEqual(zlibrary_config['base_url'],
+                         'https://zlibrary.example')
+        self.assertEqual(zlibrary_config['email'], 'test@example.com')
+        self.assertEqual(zlibrary_config['password'], 'test_pass')
+        self.assertEqual(zlibrary_config['download_dir'], '/tmp/downloads')
+        self.assertEqual(zlibrary_config['format_priority'],
                          ['PDF', 'EPUB', 'MOBI'])
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_scheduler_config(self, mock_yaml_load, mock_exists,
-                                  mock_file):
+    def test_get_scheduler_config(self):
         """Test getting scheduler configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get scheduler config
+        # Test
         scheduler_config = config_manager.get_scheduler_config()
 
         # Verify
-        self.assertEqual(scheduler_config, self.test_config['scheduler'])
         self.assertEqual(scheduler_config['enabled'], True)
         self.assertEqual(scheduler_config['sync_interval_days'], 1)
+        self.assertEqual(scheduler_config['sync_time'], '03:00')
+        self.assertEqual(scheduler_config['cleanup_interval_days'], 7)
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_lark_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting Lark configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+    def test_get_lark_config(self):
+        """Test getting lark configuration."""
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get Lark config
+        # Test
         lark_config = config_manager.get_lark_config()
 
         # Verify
-        self.assertEqual(lark_config, self.test_config['lark'])
         self.assertEqual(lark_config['enabled'], True)
         self.assertEqual(lark_config['webhook_url'],
                          'https://open.feishu.cn/webhook/test')
+        self.assertEqual(lark_config['secret'], 'test_secret')
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_logging_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting logging configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
+    def test_get_settings_config(self):
+        """Test getting settings configuration."""
+        config_manager = ConfigManager(self.test_config_path)
 
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get logging config
-        logging_config = config_manager.get_logging_config()
+        # Test
+        settings_config = config_manager.get_settings_config()
 
         # Verify
-        self.assertEqual(logging_config, self.test_config['logging'])
-        self.assertEqual(logging_config['level'], 'INFO')
-        self.assertEqual(logging_config['file'], 'logs/app.log')
+        self.assertEqual(settings_config['download_timeout'], 300)
+        self.assertEqual(settings_config['max_retries'], 3)
+        self.assertEqual(settings_config['retry_delay'], 5)
 
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('os.path.exists')
-    @patch('yaml.safe_load')
-    def test_get_system_config(self, mock_yaml_load, mock_exists, mock_file):
-        """Test getting system configuration."""
-        # Setup mocks
-        mock_exists.return_value = True
-        mock_yaml_load.return_value = self.test_config
-        mock_file.return_value.__enter__.return_value.read.return_value = self.yaml_content
-
-        # Create config manager and load config
-        config_manager = ConfigManager('config.yaml')
-        config_manager.load_config()
-
-        # Get system config
-        system_config = config_manager.get_system_config()
-
-        # Verify
-        self.assertEqual(system_config, self.test_config['system'])
-        self.assertEqual(system_config['temp_dir'], '/tmp/temp')
-        self.assertEqual(system_config['max_retries'], 3)
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
 
 
 if __name__ == '__main__':

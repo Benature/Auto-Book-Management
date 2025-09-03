@@ -1,10 +1,10 @@
 import time
 import unittest
+import tempfile
+import os
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
 
 from scheduler.task_scheduler import TaskScheduler
-
 from config.config_manager import ConfigManager
 from utils.logger import get_logger
 
@@ -14,15 +14,29 @@ class TestTaskScheduler(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.config_mock = MagicMock(spec=ConfigManager)
-        self.config_mock.get_scheduler_config.return_value = {
-            'enabled': True,
-            'sync_interval_days': 1,
-            'sync_time': '03:00',
-            'cleanup_interval_days': 7
-        }
-        self.logger_mock = MagicMock(spec=get_logger)
-        self.scheduler = TaskScheduler(self.config_mock, self.logger_mock)
+        # Create a temporary config file for testing
+        self.temp_dir = tempfile.mkdtemp()
+        self.config_path = os.path.join(self.temp_dir, 'test_config.yaml')
+        
+        # Create test config content
+        config_content = '''
+scheduler:
+  enabled: true
+  sync_interval_days: 1
+  sync_time: '03:00'
+  cleanup_interval_days: 7
+database:
+  url: ':memory:'
+lark:
+  enabled: false
+'''
+        with open(self.config_path, 'w') as f:
+            f.write(config_content)
+            
+        # Use real config manager
+        self.config_manager = ConfigManager(self.config_path)
+        self.logger = get_logger('test_scheduler')
+        self.scheduler = TaskScheduler(self.config_manager, self.logger)
 
     def test_init(self):
         """Test initialization of TaskScheduler."""
@@ -34,9 +48,11 @@ class TestTaskScheduler(unittest.TestCase):
 
     def test_add_task(self):
         """Test adding a task to the scheduler."""
-        # Create a mock task function
-        task_func = MagicMock()
-        task_func.__name__ = 'test_task'
+        # Create a simple test function
+        def test_task(*args, **kwargs):
+            return {'args': args, 'kwargs': kwargs}
+        
+        task_func = test_task
 
         # Add task
         task_id = self.scheduler.add_task(name='Test Task',
@@ -65,8 +81,10 @@ class TestTaskScheduler(unittest.TestCase):
 
     def test_add_daily_task(self):
         """Test adding a daily task."""
-        task_func = MagicMock()
-        task_func.__name__ = 'daily_task'
+        def daily_task():
+            return 'daily executed'
+        
+        task_func = daily_task
 
         task_id = self.scheduler.add_daily_task(name='Daily Task',
                                                 func=task_func,
@@ -80,8 +98,10 @@ class TestTaskScheduler(unittest.TestCase):
 
     def test_add_weekly_task(self):
         """Test adding a weekly task."""
-        task_func = MagicMock()
-        task_func.__name__ = 'weekly_task'
+        def weekly_task():
+            return 'weekly executed'
+        
+        task_func = weekly_task
 
         task_id = self.scheduler.add_weekly_task(name='Weekly Task',
                                                  func=task_func,
@@ -96,10 +116,11 @@ class TestTaskScheduler(unittest.TestCase):
     def test_enable_disable_task(self):
         """Test enabling and disabling a task."""
         # Add a task
-        task_func = MagicMock()
-        task_func.__name__ = 'test_task'
+        def test_task():
+            return 'executed'
+        
         task_id = self.scheduler.add_task(name='Test Task',
-                                          func=task_func,
+                                          func=test_task,
                                           interval_days=1)
 
         # Disable task
@@ -113,10 +134,11 @@ class TestTaskScheduler(unittest.TestCase):
     def test_get_task_status(self):
         """Test getting task status."""
         # Add a task
-        task_func = MagicMock()
-        task_func.__name__ = 'test_task'
+        def test_task():
+            return 'executed'
+        
         task_id = self.scheduler.add_task(name='Test Task',
-                                          func=task_func,
+                                          func=test_task,
                                           interval_days=1)
 
         # Get status
@@ -132,16 +154,18 @@ class TestTaskScheduler(unittest.TestCase):
     def test_get_all_task_statuses(self):
         """Test getting all task statuses."""
         # Add multiple tasks
-        task_func1 = MagicMock()
-        task_func1.__name__ = 'task1'
+        def task1():
+            return 'task1 executed'
+        
+        def task2():
+            return 'task2 executed'
+        
         task_id1 = self.scheduler.add_task(name='Task 1',
-                                           func=task_func1,
+                                           func=task1,
                                            interval_days=1)
 
-        task_func2 = MagicMock()
-        task_func2.__name__ = 'task2'
         task_id2 = self.scheduler.add_task(name='Task 2',
-                                           func=task_func2,
+                                           func=task2,
                                            interval_days=2)
 
         # Get all statuses
@@ -156,9 +180,15 @@ class TestTaskScheduler(unittest.TestCase):
 
     def test_run_task(self):
         """Test running a task."""
-        # Create a mock task function
-        task_func = MagicMock()
-        task_func.__name__ = 'test_task'
+        # Create a test function that tracks execution
+        self.execution_results = []
+        
+        def test_task(*args, **kwargs):
+            result = {'args': args, 'kwargs': kwargs}
+            self.execution_results.append(result)
+            return result
+        
+        task_func = test_task
 
         # Add task
         task_id = self.scheduler.add_task(name='Test Task',
@@ -171,7 +201,9 @@ class TestTaskScheduler(unittest.TestCase):
         self.scheduler.run_task(task_id)
 
         # Verify
-        task_func.assert_called_once_with(1, 2, key='value')
+        self.assertEqual(len(self.execution_results), 1)
+        self.assertEqual(self.execution_results[0]['args'], (1, 2))
+        self.assertEqual(self.execution_results[0]['kwargs'], {'key': 'value'})
         self.assertIsNotNone(self.scheduler.tasks[task_id]['last_run'])
         self.assertIsNotNone(self.scheduler.tasks[task_id]['next_run'])
 
@@ -199,14 +231,22 @@ class TestTaskScheduler(unittest.TestCase):
         expected_next_run = now + timedelta(days=2)
         self.assertEqual(next_run.date(), expected_next_run.date())
 
-    @patch('scheduler.task_scheduler.time.sleep')
-    def test_run_pending_tasks(self, mock_sleep):
+    def test_run_pending_tasks(self):
         """Test running pending tasks."""
-        # Create mock task functions
-        task_func1 = MagicMock()
-        task_func1.__name__ = 'task1'
-        task_func2 = MagicMock()
-        task_func2.__name__ = 'task2'
+        # Create test functions that track execution
+        self.task1_executed = False
+        self.task2_executed = False
+        
+        def task1():
+            self.task1_executed = True
+            return 'task1 executed'
+        
+        def task2():
+            self.task2_executed = True
+            return 'task2 executed'
+        
+        task_func1 = task1
+        task_func2 = task2
 
         # Add tasks
         # Task 1: Due to run (next_run in the past)
@@ -227,16 +267,17 @@ class TestTaskScheduler(unittest.TestCase):
         self.scheduler.run_pending_tasks(run_once=True)
 
         # Verify
-        task_func1.assert_called_once()  # Task 1 should have run
-        task_func2.assert_not_called()  # Task 2 should not have run
+        self.assertTrue(self.task1_executed)  # Task 1 should have run
+        self.assertFalse(self.task2_executed)  # Task 2 should not have run
 
     def test_is_task_due(self):
         """Test checking if a task is due to run."""
         # Create a task
-        task_func = MagicMock()
-        task_func.__name__ = 'test_task'
+        def test_task():
+            return 'executed'
+        
         task_id = self.scheduler.add_task(name='Test Task',
-                                          func=task_func,
+                                          func=test_task,
                                           interval_days=1)
 
         # Set next_run to the past
@@ -250,6 +291,12 @@ class TestTaskScheduler(unittest.TestCase):
             hours=1)
         self.assertFalse(
             self.scheduler._is_task_due(self.scheduler.tasks[task_id]))
+
+
+    def tearDown(self):
+        """Clean up test fixtures."""
+        import shutil
+        shutil.rmtree(self.temp_dir)
 
 
 if __name__ == '__main__':
