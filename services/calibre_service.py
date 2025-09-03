@@ -38,9 +38,10 @@ class CalibreService:
         self.match_threshold = match_threshold
         self.timeout = 120  # 2 分钟超时
 
-    def _execute_calibredb_command(self, args: List[str],
-                                   cwd: Optional[str] = None
-                                   ) -> Tuple[str, str, int]:
+    def _execute_calibredb_command(
+            self,
+            args: List[str],
+            cwd: Optional[str] = None) -> Tuple[str, str, int]:
         """
         执行 calibredb 命令
 
@@ -99,8 +100,7 @@ class CalibreService:
         try:
             # calibredb search 返回逗号分隔的 ID 列表
             book_ids = [
-                int(book_id.strip())
-                for book_id in book_ids_str.split(',')
+                int(book_id.strip()) for book_id in book_ids_str.split(',')
                 if book_id.strip()
             ]
             return book_ids
@@ -123,15 +123,24 @@ class CalibreService:
             books = []
 
             for book_data in books_data:
+                # 处理 authors 字段 - 确保是列表格式
+                authors_data = book_data.get('authors', [])
+                if isinstance(authors_data, str):
+                    # 如果是字符串，按 ' & ' 分割成列表
+                    authors_list = [author.strip() for author in authors_data.split(' & ')]
+                elif isinstance(authors_data, list):
+                    authors_list = authors_data
+                else:
+                    authors_list = []
+                
                 book_info = {
                     'calibre_id': book_data.get('id', 0),
                     'title': book_data.get('title', ''),
-                    'authors': book_data.get('authors', []),
-                    'author': ', '.join(book_data.get('authors', [])),
+                    'authors': authors_list,
+                    'author': ', '.join(authors_list),
                     'publisher': book_data.get('publisher', ''),
                     'identifiers': book_data.get('identifiers', {}),
-                    'isbn': book_data.get('identifiers', {}).get(
-                        'isbn', ''),
+                    'isbn': book_data.get('identifiers', {}).get('isbn', ''),
                     'formats': book_data.get('formats', []),
                     'cover_url': '',  # calibredb 不直接提供封面 URL
                     'raw_data': book_data
@@ -149,8 +158,8 @@ class CalibreService:
     def search_book(self,
                     title: str,
                     author: Optional[str] = None,
-                    isbn: Optional[str] = None
-                    ) -> List[Dict[str, Any]]:
+                    isbn: Optional[str] = None,
+                    verbose: bool = False) -> List[Dict[str, Any]]:
         """
         搜索书籍
 
@@ -158,6 +167,7 @@ class CalibreService:
             title: 书名
             author: 作者（可选）
             isbn: ISBN（可选）
+            verbose: 是否打印 calibredb 命令（可选）
 
         Returns:
             List[Dict[str, Any]]: 搜索结果列表
@@ -174,8 +184,8 @@ class CalibreService:
                 # 使用标题和作者搜索
                 if title:
                     # 对标题进行处理，移除副标题和特殊字符
-                    clean_title = re.sub(
-                        r'[:\(\)\[\]\{\}].*$', '', title).strip()
+                    clean_title = re.sub(r'[:\(\)\[\]\{\}].*$', '',
+                                         title).strip()
                     # 使用模糊匹配
                     query_parts.append(f'title:~"{clean_title}"')
 
@@ -191,6 +201,17 @@ class CalibreService:
 
             # 执行搜索命令
             search_args = ['search', search_query]
+
+            if verbose:
+                command = ['calibredb'] + search_args
+                if self.server_url:
+                    command.extend(['--library-path', self.server_url])
+                if self.username:
+                    command.extend(['--username', self.username])
+                if self.password:
+                    command.extend(['--password', '***'])  # 不显示真实密码
+                print(f"calibredb 命令: {' '.join(command)}")
+
             stdout, stderr, returncode = self._execute_calibredb_command(
                 search_args)
 
@@ -202,12 +223,10 @@ class CalibreService:
             book_ids = self._parse_search_results(stdout)
 
             if not book_ids:
-                self.logger.info(
-                    f"未找到匹配的书籍: {search_query}")
+                self.logger.info(f"未找到匹配的书籍: {search_query}")
                 return []
 
-            self.logger.info(
-                f"搜索成功，找到 {len(book_ids)} 个结果")
+            self.logger.info(f"搜索成功，找到 {len(book_ids)} 个结果")
 
             # 获取书籍详细信息
             return self._get_books_info(book_ids)
@@ -216,8 +235,7 @@ class CalibreService:
             self.logger.error(f"搜索书籍失败: {str(e)}")
             return []
 
-    def _get_books_info(self, book_ids: List[int]
-                        ) -> List[Dict[str, Any]]:
+    def _get_books_info(self, book_ids: List[int]) -> List[Dict[str, Any]]:
         """
         批量获取书籍详细信息
 
@@ -232,15 +250,12 @@ class CalibreService:
 
         try:
             # 构建 ID 搜索查询
-            id_query = " or ".join(
-                [f"id:{book_id}" for book_id in book_ids])
+            id_query = " or ".join([f"id:{book_id}" for book_id in book_ids])
 
             # 使用 calibredb list 获取详细信息
             list_args = [
-                'list',
-                '--for-machine',
-                '--fields', 'all',
-                '--search', id_query
+                'list', '--for-machine', '--fields', 'all', '--search',
+                id_query
             ]
 
             stdout, stderr, returncode = self._execute_calibredb_command(
@@ -253,8 +268,7 @@ class CalibreService:
             return self._parse_book_list(stdout)
 
         except Exception as e:
-            self.logger.error(
-                f"批量获取书籍信息失败: {str(e)}")
+            self.logger.error(f"批量获取书籍信息失败: {str(e)}")
             return []
 
     def get_book_info(self, book_id: int) -> Optional[Dict[str, Any]]:
@@ -274,8 +288,7 @@ class CalibreService:
             self,
             title: str,
             author: Optional[str] = None,
-            isbn: Optional[str] = None
-            ) -> Optional[Dict[str, Any]]:
+            isbn: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         找到最佳匹配的书籍
 
@@ -302,20 +315,17 @@ class CalibreService:
             best_score = 0.0
 
             for book in books:
-                score = self._calculate_match_score(
-                    book, title, author, isbn)
+                score = self._calculate_match_score(book, title, author, isbn)
                 if score > best_score and score >= self.match_threshold:
                     best_score = score
                     best_match = book
 
             if best_match:
-                self.logger.info(
-                    f"找到最佳匹配: {best_match['title']} "
-                    f"(匹配度: {best_score:.2f})")
+                self.logger.info(f"找到最佳匹配: {best_match['title']} "
+                                 f"(匹配度: {best_score:.2f})")
             else:
-                self.logger.info(
-                    f"未找到满足阈值的匹配书籍 "
-                    f"(阈值: {self.match_threshold})")
+                self.logger.info(f"未找到满足阈值的匹配书籍 "
+                                 f"(阈值: {self.match_threshold})")
 
             return best_match
 
@@ -347,8 +357,7 @@ class CalibreService:
 
         # 标题匹配
         if title and book.get('title'):
-            title_similarity = self._calculate_similarity(
-                title, book['title'])
+            title_similarity = self._calculate_similarity(title, book['title'])
             score += title_similarity * 0.3
 
         # 作者匹配
@@ -385,8 +394,7 @@ class CalibreService:
     def upload_book(
             self,
             file_path: str,
-            metadata: Optional[Dict[str, Any]] = None
-            ) -> Optional[int]:
+            metadata: Optional[Dict[str, Any]] = None) -> Optional[int]:
         """
         上传书籍
 
@@ -435,16 +443,16 @@ class CalibreService:
                     add_args.extend(['--series', metadata['series']])
 
                 if metadata.get('series_index'):
-                    add_args.extend(['--series-index',
-                                     str(metadata['series_index'])])
+                    add_args.extend(
+                        ['--series-index',
+                         str(metadata['series_index'])])
 
                 # 处理标识符
                 if metadata.get('identifiers'):
                     identifiers = metadata['identifiers']
                     for key, value in identifiers.items():
                         if value:
-                            add_args.extend(['--identifier',
-                                             f'{key}:{value}'])
+                            add_args.extend(['--identifier', f'{key}:{value}'])
 
             # 设置自动合并策略：如果存在重复，合并到现有记录
             add_args.extend(['--automerge', 'overwrite'])
@@ -462,21 +470,18 @@ class CalibreService:
             book_id = self._extract_book_id_from_add_output(stdout)
 
             if book_id:
-                self.logger.info(
-                    f"成功上传书籍: {os.path.basename(file_path)}, "
-                    f"Calibre ID: {book_id}")
+                self.logger.info(f"成功上传书籍: {os.path.basename(file_path)}, "
+                                 f"Calibre ID: {book_id}")
                 return book_id
             else:
-                self.logger.warning(
-                    f"无法从输出中提取书籍 ID: {stdout}")
+                self.logger.warning(f"无法从输出中提取书籍 ID: {stdout}")
                 return None
 
         except Exception as e:
             self.logger.error(f"上传书籍失败: {str(e)}")
             return None
 
-    def _extract_book_id_from_add_output(self, output: str
-                                         ) -> Optional[int]:
+    def _extract_book_id_from_add_output(self, output: str) -> Optional[int]:
         """
         从 calibredb add 输出中提取书籍 ID
 

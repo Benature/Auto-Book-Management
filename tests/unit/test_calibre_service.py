@@ -187,7 +187,8 @@ def test_search_parameters_validation():
 def test_search_book_by_title(calibre_service):
     """测试按标题搜索书籍"""
     # 使用简单的书名进行搜索测试
-    results = calibre_service.search_book(title="交易")
+    title = "交易"
+    results = calibre_service.search_book(title=title, verbose=True)
 
     # 验证返回结果是列表
     assert isinstance(results, list)
@@ -208,8 +209,8 @@ def test_search_book_by_title(calibre_service):
             assert isinstance(book['author'], str)
 
             # 验证标题包含搜索关键词（不区分大小写）
-            assert 'python' in book['title'].lower()
+            assert title in book['title'].lower()
 
-    print(f"搜索 'python' 找到 {len(results)} 本书")
+    print(f"搜索 {title} 找到 {len(results)} 本书")
     for book in results[:3]:  # 只显示前3本
         print(f"- {book['title']} by {book['author']}")

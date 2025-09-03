@@ -5,7 +5,7 @@ test*
 *.db
 *.log
 logs/
-*.db.backup*
+# *.db.backup*
 data/downloads/
 
 .venv
