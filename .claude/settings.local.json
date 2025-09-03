@@ -15,7 +15,9 @@
       "Bash(flake8:*)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(calibredb list:*)",
+      "Bash(uv list:*)"
     ],
     "deny": [
       "Read(config.yaml)"
