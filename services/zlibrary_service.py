@@ -619,16 +619,11 @@ class ZLibraryDownloadService:
                     [f"{k}={v}" for k, v in self.lib.cookies.items()] +
                     ["switchLanguage=zh", "siteLanguage=zh"])
 
-                print(headers)
-
                 # 配置代理
                 proxies = None
                 if self.proxy_list:
                     proxy_url = random.choice(self.proxy_list)
-                    proxies = {
-                        'http': proxy_url,
-                        'https': proxy_url
-                    }
+                    proxies = {'http': proxy_url, 'https': proxy_url}
                     self.logger.info(f"使用代理: {proxy_url}")
 
                 # 使用 AsyncZlib 的 cookies
@@ -703,7 +698,7 @@ class ZLibraryDownloadService:
                 return str(file_path)
 
             except Exception as e:
-                traceback.print_exc()
+                # traceback.print_exc()
                 error_msg = str(e)
                 is_connection_reset = ("Connection reset by peer" in error_msg
                                        or "[Errno 54]" in error_msg

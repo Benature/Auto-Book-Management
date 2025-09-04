@@ -19,7 +19,8 @@
       "Bash(calibredb list:*)",
       "Bash(uv list:*)",
       "Bash(uv pip:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(uv venv:*)"
     ],
     "deny": [
       "Read(config.yaml)"
