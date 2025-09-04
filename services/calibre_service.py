@@ -492,15 +492,19 @@ class CalibreService:
             Optional[int]: 提取到的书籍 ID，提取失败则返回 None
         """
         try:
-            # 查找形如 "Added book ids: 123" 的输出
-            match = re.search(r'Added book ids?:\s*(\d+)', output)
-            if match:
-                return int(match.group(1))
-
-            # 查找形如 "Book id of imported book: 123" 的输出
-            match = re.search(r'Book id of imported book:\s*(\d+)', output)
-            if match:
-                return int(match.group(1))
+            # 查找各种可能的输出格式
+            patterns = [
+                r'Added book ids?:\s*(\d+)',           # 英文: Added book ids: 123
+                r'Book id of imported book:\s*(\d+)',   # 英文: Book id of imported book: 123
+                r'已加入的书籍id:\s*(\d+)',              # 中文: 已加入的书籍id: 1420
+                r'书籍id:\s*(\d+)',                     # 简化中文: 书籍id: 1420
+                r'id:\s*(\d+)',                        # 更简化: id: 1420
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, output, re.IGNORECASE)
+                if match:
+                    return int(match.group(1))
 
             return None
         except Exception as e:

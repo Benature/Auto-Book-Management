@@ -1,2 +1,4 @@
 - [ ] 把所有test文件都挪到tests目录下
-- [ ] zlibrary_book 表没有zlibrary id 信息
+- [ ] 跑通上传书籍流程
+- [ ] 完善匹配度打分逻辑（人为检查）
+- [ ] 飞书卡片使用markdown而非text纯文本

@@ -65,23 +65,23 @@ class UploadStage(BaseStage):
                 self.logger.info(f"书籍已存在于Calibre中: {book.title}")
                 return True
             
-            # 获取下载记录
-            download_record = self._get_successful_download_record(book)
-            if not download_record:
+            # 获取下载记录信息
+            download_info = self._get_download_record_info(book)
+            if not download_info:
                 self.logger.error(f"未找到成功的下载记录: {book.title}")
                 raise ProcessingError(f"未找到成功的下载记录: {book.title}", retryable=False)
             
             # 验证文件存在
-            if not os.path.exists(download_record.file_path):
-                self.logger.error(f"下载文件不存在: {download_record.file_path}")
-                raise ProcessingError(f"下载文件不存在: {download_record.file_path}", retryable=False)
+            if not os.path.exists(download_info['file_path']):
+                self.logger.error(f"下载文件不存在: {download_info['file_path']}")
+                raise ProcessingError(f"下载文件不存在: {download_info['file_path']}", retryable=False)
             
             # 准备元数据
-            metadata = self._prepare_metadata(book, download_record)
+            metadata = self._prepare_metadata_from_info(book, download_info)
             
             # 上传到Calibre
             calibre_id = self.calibre_service.upload_book(
-                file_path=download_record.file_path,
+                file_path=download_info['file_path'],
                 metadata=metadata
             )
             
@@ -89,8 +89,12 @@ class UploadStage(BaseStage):
                 raise ProcessingError(f"Calibre上传失败: {book.title}")
             
             # 更新下载记录
-            download_record.calibre_id = calibre_id
-            self.db_session.commit()
+            with self.state_manager.get_session() as session:
+                # 在新会话中重新获取下载记录对象
+                record = session.query(DownloadRecord).get(download_info['id'])
+                if record:
+                    record.calibre_id = calibre_id
+                    session.commit()
             
             self.logger.info(f"成功上传到Calibre: {book.title}, Calibre ID: {calibre_id}")
             return True
@@ -144,22 +148,94 @@ class UploadStage(BaseStage):
             self.logger.warning(f"检查Calibre中书籍存在性时出错: {str(e)}")
             return None
     
-    def _get_successful_download_record(self, book: DoubanBook) -> Optional[DownloadRecord]:
+    def _get_successful_download_record_id(self, book: DoubanBook) -> Optional[int]:
         """
-        获取成功的下载记录
+        获取成功的下载记录ID
         
         Args:
             book: 书籍对象
             
         Returns:
-            Optional[DownloadRecord]: 成功的下载记录
+            Optional[int]: 成功的下载记录ID
         """
-        return self.db_session.query(DownloadRecord).filter(
-            DownloadRecord.book_id == book.id,
-            DownloadRecord.status == "success",
-            DownloadRecord.file_path.isnot(None)
-        ).order_by(DownloadRecord.created_at.desc()).first()
+        with self.state_manager.get_session() as session:
+            record = session.query(DownloadRecord).filter(
+                DownloadRecord.book_id == book.id,
+                DownloadRecord.status == "success",
+                DownloadRecord.file_path.isnot(None)
+            ).order_by(DownloadRecord.created_at.desc()).first()
+            
+            return record.id if record else None
     
+    def _get_download_record_info(self, book: DoubanBook) -> Optional[Dict[str, Any]]:
+        """
+        获取成功的下载记录信息（不返回对象）
+        
+        Args:
+            book: 书籍对象
+            
+        Returns:
+            Optional[Dict[str, Any]]: 下载记录信息
+        """
+        with self.state_manager.get_session() as session:
+            record = session.query(DownloadRecord).filter(
+                DownloadRecord.book_id == book.id,
+                DownloadRecord.status == "success",
+                DownloadRecord.file_path.isnot(None)
+            ).order_by(DownloadRecord.created_at.desc()).first()
+            
+            if record:
+                return {
+                    'id': record.id,
+                    'file_path': record.file_path,
+                    'file_format': record.file_format,
+                    'file_size': record.file_size
+                }
+            return None
+    
+    def _prepare_metadata_from_info(self, book: DoubanBook, download_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从下载信息准备上传用的元数据
+        
+        Args:
+            book: 书籍对象
+            download_info: 下载记录信息字典
+            
+        Returns:
+            Dict[str, Any]: 元数据字典
+        """
+        metadata = {
+            'title': book.title,
+            'authors': [book.author] if book.author else [],
+            'isbn': book.isbn,
+            'publisher': book.publisher,
+            'pubdate': book.publish_date,
+            'tags': ['豆瓣', 'Z-Library'],
+            'comments': book.description,
+            'rating': book.douban_rating
+        }
+        
+        # 添加原标题和副标题
+        if book.original_title:
+            metadata['title_sort'] = book.original_title
+        
+        if book.subtitle:
+            metadata['title'] = f"{book.title}: {book.subtitle}"
+        
+        # 添加封面URL（如果有）
+        if book.cover_url:
+            metadata['cover_url'] = book.cover_url
+        
+        # 添加豆瓣相关信息
+        metadata['identifiers'] = {
+            'douban': book.douban_id
+        }
+        
+        if book.isbn:
+            metadata['identifiers']['isbn'] = book.isbn
+        
+        return metadata
+
     def _prepare_metadata(self, book: DoubanBook, download_record: DownloadRecord) -> Dict[str, Any]:
         """
         准备上传用的元数据
