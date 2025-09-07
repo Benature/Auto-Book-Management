@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 import requests
+from larkpy import LarkBot
 
 from utils.logger import get_logger
 
@@ -29,6 +30,7 @@ class LarkService:
         self.logger = get_logger("lark_service")
         self.webhook_url = webhook_url
         self.secret = secret
+        self.bot = LarkBot(webhook_url)
 
     def send_text_message(self, content: str) -> bool:
         """
@@ -176,7 +178,8 @@ class LarkService:
         title = "📚 豆瓣书籍下载通知"
         return self.send_card_message(title, elements)
 
-    def send_403_error_notification(self, error_message: str, url: str) -> bool:
+    def send_403_error_notification(self, error_message: str,
+                                    url: str) -> bool:
         """
         发送豆瓣403错误通知
         
@@ -216,10 +219,13 @@ class LarkService:
 
         # 添加时间信息
         elements.append({
-            "tag": "note",
+            "tag":
+            "note",
             "elements": [{
-                "tag": "plain_text",
-                "content": f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                "tag":
+                "plain_text",
+                "content":
+                f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             }]
         })
 

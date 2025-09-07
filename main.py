@@ -664,33 +664,32 @@ class DoubanZLibraryCalibrer:
             status = book_info['status']
             title = book_info.get('title', f'书籍ID{book_id}')
             
-            # 根据书籍状态确定起始阶段
+            # 根据书籍状态确定当前需要处理的阶段（只调度一个阶段，其他的由状态管理器自动调度）
+            current_stage = None
             if status == BookStatus.NEW:
-                stages = ['data_collection', 'search', 'download', 'upload']
-            elif status == BookStatus.DETAIL_COMPLETE:
-                stages = ['search', 'download', 'upload']
-            elif status == BookStatus.SEARCH_QUEUED:
-                stages = ['search', 'download', 'upload']
-            elif status == BookStatus.SEARCH_COMPLETE:
-                stages = ['download', 'upload']
-            elif status == BookStatus.DOWNLOAD_QUEUED:
-                stages = ['download', 'upload']
-            elif status == BookStatus.DOWNLOAD_COMPLETE:
-                stages = ['upload']
-            elif status == BookStatus.UPLOAD_QUEUED:
-                stages = ['upload']
+                current_stage = 'data_collection'
+            elif status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED]:
+                current_stage = 'search'
+            elif status in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]:
+                current_stage = 'download'
+            elif status in [BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED]:
+                current_stage = 'upload'
             else:
+                self.logger.debug(f"跳过书籍 {title}，状态 {status.value} 不需要调度新任务")
                 continue  # 跳过不需要处理的状态
             
-            # 为每个阶段调度任务
-            for stage in stages:
+            # 只调度当前阶段的任务
+            try:
                 task_id = self.task_scheduler.schedule_task(
                     book_id=book_id,
-                    stage=stage,
+                    stage=current_stage,
                     priority=TaskPriority.NORMAL
                 )
-                self.logger.debug(f"调度任务: 书籍ID {book_id}, 阶段 {stage}, 任务ID {task_id}")
+                self.logger.debug(f"调度任务: 书籍ID {book_id}, 阶段 {current_stage}, 任务ID {task_id}")
                 scheduled_count += 1
+            except Exception as e:
+                self.logger.warning(f"调度任务失败: 书籍ID {book_id}, 阶段 {current_stage}, 错误: {str(e)}")
+                continue
                 
         self.logger.info(f"为 {len(books)} 本书调度了 {scheduled_count} 个Pipeline任务")
         return scheduled_count

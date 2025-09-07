@@ -36,8 +36,10 @@ class BookStateManager:
         },
 
         # 搜索阶段
-        BookStatus.SEARCH_QUEUED:
-        {BookStatus.SEARCH_ACTIVE, BookStatus.SKIPPED_EXISTS, BookStatus.FAILED_PERMANENT},
+        BookStatus.SEARCH_QUEUED: {
+            BookStatus.SEARCH_ACTIVE, BookStatus.SKIPPED_EXISTS,
+            BookStatus.FAILED_PERMANENT
+        },
         BookStatus.SEARCH_ACTIVE: {
             BookStatus.SEARCH_COMPLETE,
             BookStatus.SEARCH_NO_RESULTS,
@@ -248,7 +250,7 @@ class BookStateManager:
                     return False
 
                 current_status = book.status
-                
+
                 self.logger.info(
                     f"状态转换: {book_id} {current_status.value} -> {to_status.value} {change_reason}"
                 )
@@ -267,7 +269,7 @@ class BookStateManager:
 
                 if error_message:
                     book.error_message = error_message
-                    
+
                 # 确保对象被标记为dirty，强制session跟踪此对象
                 session.add(book)
 
@@ -286,8 +288,7 @@ class BookStateManager:
 
                 self.logger.info(
                     f"状态转换成功: 书籍ID {book_id}, {old_status.value} -> {to_status.value}, "
-                    f"事务即将提交, 时间: {datetime.now().isoformat()}"
-                )
+                    f"事务即将提交, 时间: {datetime.now().isoformat()}")
 
                 # 发送飞书通知
                 self._send_status_change_notification(book, old_status,
@@ -296,9 +297,11 @@ class BookStateManager:
 
             # 事务提交完成后，再调度下一个阶段的任务
             # 这确保状态更新已经完全提交到数据库
-            self.logger.debug(f"事务已提交，开始检查是否需要调度下一阶段: 书籍ID {book_id}, 当前状态: {to_status.value}")
+            self.logger.debug(
+                f"事务已提交，开始检查是否需要调度下一阶段: 书籍ID {book_id}, 当前状态: {to_status.value}"
+            )
             self._schedule_next_stage_if_needed(book_id, to_status)
-            
+
             return True
 
         except Exception as e:
@@ -562,12 +565,13 @@ class BookStateManager:
             message = "\n".join(message_parts)
 
             # 发送通知
-            self.lark_service.send_text_message(message)
+            self.lark_service.bot.send_card(message)
 
         except Exception as e:
             self.logger.warning(f"发送飞书通知失败: {str(e)}")
 
-    def _schedule_next_stage_if_needed(self, book_id: int, current_status: BookStatus):
+    def _schedule_next_stage_if_needed(self, book_id: int,
+                                       current_status: BookStatus):
         """
         检查是否需要调度下一个阶段的任务
         
@@ -577,14 +581,14 @@ class BookStateManager:
         """
         if not self.task_scheduler:
             return
-            
+
         # 定义状态到下一个阶段的映射
         next_stage_mapping = {
             BookStatus.DETAIL_COMPLETE: "search",
             BookStatus.SEARCH_COMPLETE: "download",
             BookStatus.DOWNLOAD_COMPLETE: "upload",
         }
-        
+
         if current_status in next_stage_mapping:
             next_stage = next_stage_mapping[current_status]
             try:
@@ -596,25 +600,31 @@ class BookStateManager:
                     next_queued_status = BookStatus.DOWNLOAD_QUEUED
                 elif next_stage == "upload":
                     next_queued_status = BookStatus.UPLOAD_QUEUED
-                
+
                 if next_queued_status:
                     # 先转换状态，然后调度任务
-                    self.transition_status(
-                        book_id=book_id,
-                        to_status=next_queued_status,
-                        change_reason=f"准备进入{next_stage}阶段"
-                    )
-                
+                    self.transition_status(book_id=book_id,
+                                           to_status=next_queued_status,
+                                           change_reason=f"准备进入{next_stage}阶段")
+
                 # 导入TaskPriority避免循环导入
                 from core.task_scheduler import TaskPriority
-                task_id = self.task_scheduler.schedule_task(
-                    book_id=book_id,
-                    stage=next_stage,
-                    priority=TaskPriority.NORMAL,
-                    delay_seconds=1  # 减少延迟，状态已经正确转换
-                )
-                self.logger.info(f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}, "
-                               f"状态已转换至: {next_queued_status.value if next_queued_status else '未转换'}, "
-                               f"调度时间: {datetime.now().isoformat()}")
+                try:
+                    task_id = self.task_scheduler.schedule_task(
+                        book_id=book_id,
+                        stage=next_stage,
+                        priority=TaskPriority.NORMAL,
+                        delay_seconds=1  # 减少延迟，状态已经正确转换
+                    )
+                    self.logger.info(
+                        f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}, "
+                        f"状态已转换至: {next_queued_status.value if next_queued_status else '未转换'}, "
+                        f"调度时间: {datetime.now().isoformat()}")
+                except ValueError as ve:
+                    # 状态不匹配的调度错误，记录警告但不阻止程序继续
+                    self.logger.warning(f"自动调度任务被跳过: {str(ve)}")
+                except Exception as task_error:
+                    # 其他调度错误
+                    self.logger.error(f"自动调度下一阶段任务失败: {str(task_error)}")
             except Exception as e:
                 self.logger.error(f"自动调度下一阶段任务失败: {str(e)}")

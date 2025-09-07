@@ -50,10 +50,24 @@ class SearchStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        # 接受DETAIL_COMPLETE和SEARCH_QUEUED状态的书籍
-        can_process = book.status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED]
-        self.logger.info(f"处理书籍: {book.title}, 状态: {book.status}, 可处理: {can_process}")
-        return can_process
+        with self.state_manager.get_session() as session:
+            # 重新查询数据库获取最新状态，避免使用缓存的book对象
+            fresh_book = session.query(DoubanBook).get(book.id)
+            if not fresh_book:
+                self.logger.warning(f"无法找到书籍: ID {book.id}")
+                return False
+            
+            current_status = fresh_book.status
+            
+            # 接受DETAIL_COMPLETE、SEARCH_QUEUED和SEARCH_ACTIVE状态的书籍
+            can_process = current_status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED, BookStatus.SEARCH_ACTIVE]
+            self.logger.info(f"处理书籍: {book.title}, 数据库状态: {current_status.value}, 传入状态: {book.status.value}, 可处理: {can_process}")
+            
+            # 如果状态不符合处理条件，记录警告
+            if not can_process:
+                self.logger.warning(f"无法处理书籍: {book.title}, 状态: {current_status.value}")
+            
+            return can_process
 
     def process(self, book: DoubanBook) -> bool:
         """
@@ -68,6 +82,10 @@ class SearchStage(BaseStage):
         # 重置标志位
         self._found_qualifying_results = False
         self._calibre_exists = False
+        
+        # 先检查是否可以处理这本书籍
+        if not self.can_process(book):
+            raise ProcessingError(f"无法处理书籍: {book.title}, 状态不匹配")
         
         try:
             # 首先检查Calibre中是否已存在
@@ -146,8 +164,12 @@ class SearchStage(BaseStage):
                 raise
         except Exception as e:
             self.logger.error(f"搜索书籍失败: {str(e)}")
+            # 特殊处理：如果是状态不匹配错误（can_process返回False导致的），直接跳过
+            if "状态不匹配" in str(e):
+                self.logger.warning(f"书籍状态不符合搜索阶段处理条件，跳过: {book.title}")
+                raise ProcessingError(f"状态不匹配: {str(e)}", retryable=False)
             # 判断错误类型
-            if "timeout" in str(e).lower() or "connection" in str(e).lower():
+            elif "timeout" in str(e).lower() or "connection" in str(e).lower():
                 raise NetworkError(f"网络错误: {str(e)}")
             elif "login" in str(e).lower() or "auth" in str(e).lower():
                 raise ProcessingError(f"认证错误: {str(e)}",

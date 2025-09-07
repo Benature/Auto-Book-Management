@@ -44,8 +44,24 @@ class UploadStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
-        return book.status in [BookStatus.DOWNLOAD_COMPLETE,
-                               BookStatus.UPLOAD_QUEUED]
+        with self.state_manager.get_session() as session:
+            # 重新查询数据库获取最新状态，避免使用缓存的book对象
+            fresh_book = session.query(DoubanBook).get(book.id)
+            if not fresh_book:
+                self.logger.warning(f"无法找到书籍: ID {book.id}")
+                return False
+            
+            current_status = fresh_book.status
+            
+            # 接受DOWNLOAD_COMPLETE、UPLOAD_QUEUED和UPLOAD_ACTIVE状态的书籍
+            can_process = current_status in [BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED, BookStatus.UPLOAD_ACTIVE]
+            self.logger.info(f"处理书籍: {book.title}, 数据库状态: {current_status.value}, 传入状态: {book.status.value}, 可处理: {can_process}")
+            
+            # 如果状态不符合处理条件，记录警告
+            if not can_process:
+                self.logger.warning(f"无法处理书籍: {book.title}, 状态: {current_status.value}")
+            
+            return can_process
 
     def process(self, book: DoubanBook) -> bool:
         """
@@ -57,6 +73,10 @@ class UploadStage(BaseStage):
         Returns:
             bool: 处理是否成功
         """
+        # 先检查是否可以处理这本书籍
+        if not self.can_process(book):
+            raise ProcessingError(f"无法处理书籍: {book.title}, 状态不匹配")
+        
         try:
             self.logger.info(f"上传书籍到Calibre: {book.title}")
 
@@ -114,9 +134,13 @@ class UploadStage(BaseStage):
             raise
         except Exception as e:
             self.logger.error(f"上传书籍失败: {str(e)}")
-
+            
+            # 特殊处理：如果是状态不匹配错误（can_process返回False导致的），直接跳过
+            if "状态不匹配" in str(e):
+                self.logger.warning(f"书籍状态不符合上传阶段处理条件，跳过: {book.title}")
+                raise ProcessingError(f"状态不匹配: {str(e)}", retryable=False)
             # 判断错误类型
-            if "timeout" in str(e).lower() or "connection" in str(e).lower():
+            elif "timeout" in str(e).lower() or "connection" in str(e).lower():
                 raise NetworkError(f"网络错误: {str(e)}")
             elif "auth" in str(e).lower() or "unauthorized" in str(e).lower():
                 raise AuthError(f"认证错误: {str(e)}")

@@ -62,8 +62,8 @@ class DownloadStage(BaseStage):
             self.logger.info(f"检查书籍处理能力: {book.title}, 数据库状态: {current_status.value}, 传入状态: {book.status.value}")
             
             # 检查书籍状态是否符合处理条件
-            # 只有DOWNLOAD_QUEUED状态的书籍才能被下载阶段处理
-            if current_status != BookStatus.DOWNLOAD_QUEUED:
+            # 接受DOWNLOAD_QUEUED和DOWNLOAD_ACTIVE状态的书籍
+            if current_status not in [BookStatus.DOWNLOAD_QUEUED, BookStatus.DOWNLOAD_ACTIVE]:
                 self.logger.warning(f"无法处理书籍: {book.title}, 状态: {current_status.value}")
                 return False
                 
@@ -96,6 +96,10 @@ class DownloadStage(BaseStage):
         Returns:
             bool: 处理是否成功
         """
+        # 先检查是否可以处理这本书籍
+        if not self.can_process(book):
+            raise ProcessingError(f"无法处理书籍: {book.title}, 状态不匹配")
+        
         try:
             self.logger.info(f"下载书籍: {book.title}")
             
@@ -152,6 +156,11 @@ class DownloadStage(BaseStage):
             raise
         except Exception as e:
             self.logger.error(f"下载书籍失败: {str(e)}")
+            
+            # 特殊处理：如果是状态不匹配错误（can_process返回False导致的），直接跳过
+            if "状态不匹配" in str(e):
+                self.logger.warning(f"书籍状态不符合下载阶段处理条件，跳过: {book.title}")
+                raise ProcessingError(f"状态不匹配: {str(e)}", retryable=False)
             
             # 创建失败的下载记录并更新队列状态
             with self.state_manager.get_session() as session:

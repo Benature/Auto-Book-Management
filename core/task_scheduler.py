@@ -143,6 +143,10 @@ class TaskScheduler:
             int: 任务ID
         """
         try:
+            # 检查书籍状态是否适合调度该阶段的任务
+            if not self._can_schedule_for_stage(book_id, stage):
+                raise ValueError(f"书籍ID {book_id} 的当前状态不适合调度 {stage} 阶段任务")
+                
             # 计算运行时间
             run_time = datetime.now() + timedelta(seconds=delay_seconds)
             
@@ -521,3 +525,48 @@ class TaskScheduler:
             # 按下次运行时间排序
             tasks.sort(key=lambda x: x['next_run_time'])
             return tasks
+    
+    def _can_schedule_for_stage(self, book_id: int, stage: str) -> bool:
+        """
+        检查书籍状态是否适合调度该阶段的任务
+        
+        Args:
+            book_id: 书籍ID
+            stage: 处理阶段名称
+            
+        Returns:
+            bool: 是否可以调度
+        """
+        try:
+            with self.state_manager.get_session() as session:
+                book = session.query(DoubanBook).get(book_id)
+                if not book:
+                    self.logger.warning(f"书籍不存在: ID {book_id}")
+                    return False
+                
+                current_status = book.status
+                
+                # 定义各阶段可以接受的状态（包括active状态，因为处理器可能需要处理正在进行的任务）
+                stage_acceptable_statuses = {
+                    'data_collection': {BookStatus.NEW, BookStatus.DETAIL_FETCHING},
+                    'search': {BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED, BookStatus.SEARCH_ACTIVE},
+                    'download': {BookStatus.DOWNLOAD_QUEUED, BookStatus.DOWNLOAD_ACTIVE},
+                    'upload': {BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED, BookStatus.UPLOAD_ACTIVE}
+                }
+                
+                acceptable_statuses = stage_acceptable_statuses.get(stage, set())
+                is_acceptable = current_status in acceptable_statuses
+                
+                self.logger.debug(f"检查调度条件: 书籍ID {book_id}, 当前状态: {current_status.value}, "
+                                f"阶段: {stage}, 可接受状态: {[s.value for s in acceptable_statuses]}, "
+                                f"可调度: {is_acceptable}")
+                
+                if not is_acceptable:
+                    self.logger.warning(f"书籍状态不适合调度 {stage} 阶段: "
+                                      f"书籍ID {book_id}, 当前状态 {current_status.value}")
+                
+                return is_acceptable
+                
+        except Exception as e:
+            self.logger.error(f"检查调度条件失败: 书籍ID {book_id}, 阶段 {stage}, 错误: {str(e)}")
+            return False
