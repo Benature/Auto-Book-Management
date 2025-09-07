@@ -11,8 +11,8 @@ from core.pipeline import (BaseStage, NetworkError, ProcessingError,
                            ResourceNotFoundError)
 from core.state_manager import BookStateManager
 from db.models import BookStatus, DoubanBook, DownloadQueue, ZLibraryBook
-from services.zlibrary_service import ZLibraryService
 from services.calibre_service import CalibreService
+from services.zlibrary_service import ZLibraryService
 
 
 class SearchStage(BaseStage):

@@ -49,7 +49,15 @@ class ResourceNotFoundError(ProcessingError):
     """资源未找到错误"""
 
     def __init__(self, message: str):
-        super().__init__(message, "resource_not_found", retryable=False)
+        super().__init__(message, "not_found", retryable=False)
+
+
+class DownloadLimitExhaustedError(ProcessingError):
+    """下载限制耗尽错误"""
+
+    def __init__(self, message: str, reset_time: str = None):
+        super().__init__(message, "download_limit", retryable=False)
+        self.reset_time = reset_time
 
 
 class BaseStage(abc.ABC):
@@ -184,6 +192,12 @@ class BaseStage(abc.ABC):
 
             return success
 
+        except DownloadLimitExhaustedError as e:
+            # 下载限制耗尽错误，不改变状态，直接返回
+            self.logger.warning(f"下载限制耗尽，保持书籍在原状态: {book.title}, 重置时间: {e.reset_time}")
+            # 不更改状态，让书籍保持在download_queued
+            raise  # 重新抛出，让PipelineManager处理
+            
         except ProcessingError as e:
             processing_time = (datetime.now() - start_time).total_seconds()
 
@@ -271,6 +285,9 @@ class PipelineManager:
         # 活跃任务追踪
         self._active_tasks: Dict[int, Future] = {}
         self._task_lock = threading.Lock()
+        
+        # 阶段暂停状态
+        self._paused_stages: Dict[str, str] = {}  # stage_name -> pause_reason
 
     def register_stage(self, stage: BaseStage):
         """
@@ -348,6 +365,12 @@ class PipelineManager:
             stage: 阶段实例
         """
         try:
+            # 检查阶段是否被暂停
+            if stage_name in self._paused_stages:
+                pause_reason = self._paused_stages[stage_name]
+                self.logger.debug(f"阶段 {stage_name} 已暂停: {pause_reason}")
+                return
+            
             # 阶段名到状态阶段的映射
             stage_mapping = {
                 'data_collection': 'data_collection',
@@ -422,7 +445,13 @@ class PipelineManager:
 
                 # 执行阶段处理
                 return stage.execute(book)
-
+                
+        except DownloadLimitExhaustedError as e:
+            # 下载限制耗尽，暂停整个下载阶段
+            self.logger.warning(f"下载限制耗尽，暂停下载阶段: {e.reset_time}")
+            self._paused_stages[stage.name] = f"下载限制耗尽，重置时间: {e.reset_time}"
+            return False
+            
         except Exception as e:
             self.logger.error(f"执行阶段处理失败: {str(e)}")
             return False
@@ -466,3 +495,23 @@ class PipelineManager:
             int: 重置的任务数量
         """
         return self.state_manager.reset_stuck_statuses(timeout_minutes)
+    
+    def resume_stage(self, stage_name: str):
+        """
+        恢复被暂停的阶段
+        
+        Args:
+            stage_name: 阶段名称
+        """
+        if stage_name in self._paused_stages:
+            pause_reason = self._paused_stages.pop(stage_name)
+            self.logger.info(f"恢复阶段 {stage_name}，原暂停原因: {pause_reason}")
+    
+    def get_paused_stages(self) -> Dict[str, str]:
+        """
+        获取所有暂停的阶段
+        
+        Returns:
+            Dict[str, str]: 暂停的阶段及其原因
+        """
+        return self._paused_stages.copy()

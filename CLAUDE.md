@@ -49,7 +49,7 @@ This is a book synchronization automation tool that syncs books from Douban wish
 **Main Application V2** (`main_v2.py`):
 - Pipeline架构的入口点和编排器
 - 支持 `--once`, `--daemon` 模式
-- 豆瓣403错误智能处理：跳过豆瓣同步，继续Z-Library搜索
+- 豆瓣403错误智能处理：保留当前状态并重试，继续处理已获取详情的书籍
 
 **Core Pipeline System** (`core/`):
 - `BookStateManager`: 统一状态管理，支持19种精细化状态和转换验证
@@ -58,7 +58,7 @@ This is a book synchronization automation tool that syncs books from Douban wish
 - `ErrorHandler`: 分类错误处理，支持可重试和永久失败区分
 
 **Pipeline Stages** (`stages/`):
-- `DataCollectionStage`: 豆瓣数据收集，支持403时跳过详情获取
+- `DataCollectionStage`: 豆瓣数据收集，支持403时保留状态并重试
 - `SearchStage`: Z-Library搜索，自动状态转换和结果保存
 - `DownloadStage`: 书籍文件下载，支持多格式和质量选择
 - `UploadStage`: Calibre上传，自动去重和元数据同步
@@ -114,7 +114,7 @@ V2版本采用Pipeline架构，支持19种精细化状态和完整的错误处�
 
 **完整流程**: `NEW` → `DETAIL_FETCHING` → `DETAIL_COMPLETE` → `SEARCH_QUEUED` → `SEARCH_ACTIVE` → `SEARCH_COMPLETE` → `DOWNLOAD_QUEUED` → `DOWNLOAD_ACTIVE` → `DOWNLOAD_COMPLETE` → `UPLOAD_QUEUED` → `UPLOAD_ACTIVE` → `UPLOAD_COMPLETE` → `COMPLETED`
 
-**豆瓣403特殊处理**: 当遇到豆瓣403错误时，系统跳过豆瓣同步，直接处理现有书籍进行Z-Library搜索，确保服务连续性。
+**豆瓣403特殊处理**: 当遇到豆瓣403错误时，系统保留当前书籍状态并稍后重试，同时继续处理已获取到详细信息的书籍进行Z-Library搜索，确保服务连续性。
 
 **详细状态流程图**: 查看 `docs/book_status_flow_diagram.md` 了解完整的Mermaid流程图和状态转换规则。
 

@@ -98,12 +98,10 @@ class DataCollectionStage(BaseStage):
             return True
             
         except DoubanAccessDeniedException as e:
-            self.logger.warning(f"豆瓣访问被拒绝，跳过详细信息获取: {str(e)}")
-            # 豆瓣403错误时，跳过详细信息获取但仍然准备搜索信息，以便进行Z-Library搜索
-            book.search_title = self._prepare_search_title(book)
-            book.search_author = self._prepare_search_author(book)
-            self.logger.info(f"已准备搜索信息，跳过详细信息获取: {book.title}")
-            return True
+            self.logger.warning(f"豆瓣访问被拒绝，保留当前状态: {str(e)}")
+            # 豆瓣403错误时，保留当前状态，不强制跳过详细信息获取
+            # 抛出可重试错误，让系统稍后重试
+            raise NetworkError(f"豆瓣访问被拒绝: {str(e)}")
             
         except Exception as e:
             self.logger.error(f"获取书籍详细信息失败: {str(e)}")

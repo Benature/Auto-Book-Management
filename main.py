@@ -430,13 +430,12 @@ class DoubanZLibraryCalibrer:
         # 同步豆瓣书单
         sync_result = self.sync_douban_books(notify=True)
         
-        # 如果豆瓣403错误，则跳过豆瓣同步，但继续处理现有书籍
-        if not sync_result['success'] and sync_result.get('error') != '豆瓣访问被拒绝':
-            return sync_result
-        
-        # 如果是豆瓣403错误，记录信息但继续处理
+        # 如果豆瓣403错误，记录信息但继续处理现有书籍
         if not sync_result['success'] and sync_result.get('error') == '豆瓣访问被拒绝':
-            self.logger.warning("豆瓣403错误，跳过豆瓣同步，继续处理现有书籍进行Z-Library搜索")
+            self.logger.warning("豆瓣403错误，暂时无法获取新书籍信息，继续处理现有书籍")
+        # 如果是其他类型的错误，则返回错误结果
+        elif not sync_result['success']:
+            return sync_result
         
         # 检查数据库中是否有待处理的书籍
         pending_books = self._get_pending_books_for_processing()
@@ -541,10 +540,31 @@ class DoubanZLibraryCalibrer:
             # 检查是否需要调度下一本书（顺序处理逻辑）
             self._schedule_next_book_if_needed()
             
+            # 如果有活跃任务，重置循环计数器
+            if active_tasks > 0 and hasattr(self, '_empty_queue_cycles'):
+                self._empty_queue_cycles = 0
+            
             if active_tasks == 0:
                 # 检查是否还有待处理的书籍
                 if hasattr(self, 'pending_books_queue') and self.pending_books_queue:
                     self.logger.info(f"当前任务队列为空，但还有 {len(self.pending_books_queue)} 本书等待处理")
+                    
+                    # 检查循环次数，防止无限循环
+                    if not hasattr(self, '_empty_queue_cycles'):
+                        self._empty_queue_cycles = 0
+                    
+                    self._empty_queue_cycles += 1
+                    
+                    # 如果连续10次队列为空但还有书籍，说明可能卡死了
+                    if self._empty_queue_cycles >= 10:
+                        self.logger.error("检测到可能的死循环：队列为空但书籍无法调度，强制退出")
+                        # 记录当前状态用于调试
+                        if hasattr(self, 'current_processing_book'):
+                            self.logger.error(f"当前处理书籍: {self.current_processing_book}")
+                        remaining_books = [f"ID{book['id']}: {book.get('status', 'UNKNOWN')}" for book in self.pending_books_queue[:5]]
+                        self.logger.error(f"剩余书籍前5本: {remaining_books}")
+                        break
+                    
                     # 继续等待，可能有书籍状态还未到达终态
                     if self._shutdown_event.wait(5):
                         break
@@ -741,7 +761,19 @@ class DoubanZLibraryCalibrer:
         if not hasattr(self, 'pending_books_queue') or not self.pending_books_queue:
             return
         
+        # 如果没有当前处理的书籍，但队列不为空，说明需要开始处理第一本书
         if not hasattr(self, 'current_processing_book') or not self.current_processing_book:
+            self.logger.info("没有当前处理书籍，尝试从队列中调度第一本书")
+            first_book = self.pending_books_queue[0]
+            scheduled = self._schedule_single_book_task(first_book)
+            if scheduled > 0:
+                self.current_processing_book = first_book
+                book_title = first_book.get('title', f'书籍ID{first_book["id"]}')
+                self.logger.info(f"开始处理第一本书: {book_title}")
+            else:
+                # 如果第一本书调度失败，移除并尝试下一本
+                self.pending_books_queue.pop(0)
+                self._schedule_next_book_if_needed()
             return
         
         current_book_id = self.current_processing_book['id']

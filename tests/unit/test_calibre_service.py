@@ -2,8 +2,9 @@
 """
 CalibreService 单元测试
 """
-import pytest
 from pathlib import Path
+
+import pytest
 
 from config.config_manager import ConfigManager
 from services.calibre_service import CalibreService

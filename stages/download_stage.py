@@ -9,7 +9,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from core.pipeline import (BaseStage, NetworkError, ProcessingError,
+from core.pipeline import (BaseStage, DownloadLimitExhaustedError,
+                           NetworkError, ProcessingError,
                            ResourceNotFoundError)
 from core.state_manager import BookStateManager
 from db.models import (BookStatus, DoubanBook, DownloadQueue, DownloadRecord,
@@ -81,8 +82,13 @@ class DownloadStage(BaseStage):
             
             # 检查Z-Library下载限制
             if not self.zlibrary_service.check_download_available():
-                self.logger.warning(f"Z-Library下载次数不足，跳过处理书籍: {book.title}")
-                return False
+                limits = self.zlibrary_service.get_download_limits()
+                reset_time = limits.get('daily_reset', '未知')
+                self.logger.warning(f"Z-Library下载次数不足，暂停下载阶段，重置时间: {reset_time}")
+                raise DownloadLimitExhaustedError(
+                    f"Z-Library下载次数不足，重置时间: {reset_time}", 
+                    reset_time=reset_time
+                )
             
             return True
     

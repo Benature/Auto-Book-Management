@@ -23,7 +23,7 @@ zlibrary  # Z-Library API 客户端包
 
 # 日志与监控
 loguru
-larkpy
+larkpy>=0.3.0
 nest_asyncio
 
 # 测试工具

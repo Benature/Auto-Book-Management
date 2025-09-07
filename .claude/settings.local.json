@@ -20,7 +20,8 @@
       "Bash(uv list:*)",
       "Bash(uv pip:*)",
       "Bash(pytest:*)",
-      "Bash(uv venv:*)"
+      "Bash(uv venv:*)",
+      "Bash(cat:*)"
     ],
     "deny": [
       "Read(config.yaml)"
