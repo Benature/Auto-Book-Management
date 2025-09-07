@@ -76,7 +76,15 @@ class DownloadStage(BaseStage):
             has_queued_item = queue_item is not None
             self.logger.info(f"下载队列检查: {book.title}, 队列中有待处理项: {has_queued_item}")
             
-            return has_queued_item
+            if not has_queued_item:
+                return False
+            
+            # 检查Z-Library下载限制
+            if not self.zlibrary_service.check_download_available():
+                self.logger.warning(f"Z-Library下载次数不足，跳过处理书籍: {book.title}")
+                return False
+            
+            return True
     
     def process(self, book: DoubanBook) -> bool:
         """

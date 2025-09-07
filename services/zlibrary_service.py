@@ -61,7 +61,8 @@ class ZLibrarySearchService:
         # 客户端实例
         self.lib = None
 
-        self.ensure_connected()
+        # 不在初始化时立即连接，改为延迟连接
+        # self.ensure_connected()
 
         # 搜索策略
         self.search_strategies = [{
@@ -924,6 +925,52 @@ class ZLibraryService:
             output_dir = self.download_dir
 
         return self.download_service.download_book(book_info, output_dir)
+
+    def get_download_limits(self) -> Dict[str, int]:
+        """
+        获取Z-Library下载限制信息
+        
+        Returns:
+            Dict[str, int]: 包含下载限制信息的字典
+                - daily_amount: 每日总限额
+                - daily_allowed: 每日允许下载
+                - daily_remaining: 每日剩余下载次数 
+                - daily_reset: 下次重置时间戳
+        """
+        try:
+            # 确保下载服务连接
+            self.download_service.ensure_connected()
+            
+            # 获取限制信息
+            limits = asyncio.run(self.download_service.lib.profile.get_limits())
+            
+            self.logger.info(f"获取下载限制: {limits}")
+            
+            return limits
+            
+        except Exception as e:
+            self.logger.error(f"获取下载限制失败: {str(e)}")
+            # 返回默认值，避免阻塞流程
+            return {
+                'daily_amount': 0,
+                'daily_allowed': 0,  
+                'daily_remaining': 0,
+                'daily_reset': 0
+            }
+
+    def check_download_available(self) -> bool:
+        """
+        检查是否有可用的下载次数
+        
+        Returns:
+            bool: 是否可以下载
+        """
+        limits = self.get_download_limits()
+        remaining = limits.get('daily_remaining', 0)
+        
+        self.logger.info(f"下载限制检查: 剩余次数 {remaining}")
+        
+        return remaining > 0
 
     # 已删除 search_and_download 方法，完全分离 search 和 download 步骤
 
