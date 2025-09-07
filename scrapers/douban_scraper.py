@@ -15,7 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 from rich.progress import Progress
 
-from db.models import BookStatus
+from db.models import BookStatus, DoubanBook
 from utils.logger import get_logger
 
 
@@ -46,7 +46,8 @@ class DoubanScraper:
                  user_id: int | str = None,
                  proxy: str = None,
                  min_delay: float = 1.0,
-                 max_delay: float = 3.0):
+                 max_delay: float = 3.0,
+                 database=None):
         """
         初始化爬虫
         
@@ -57,6 +58,7 @@ class DoubanScraper:
             proxy: 代理服务器地址，格式为 http://host:port 或 socks5://host:port
             min_delay: 最小延迟时间（秒）
             max_delay: 最大延迟时间（秒）
+            database: 数据库实例，用于检查书籍是否已存在
         """
         self.logger = get_logger("douban_scraper")
         self.cookie = cookie
@@ -66,6 +68,7 @@ class DoubanScraper:
         self.max_delay = max_delay
         self.consecutive_errors = 0  # 连续错误计数
         self.request_count = 0  # 请求计数
+        self.database = database  # 数据库实例
 
         assert cookie is not None, "cookie 不可为空"
         self.user_id = self.get_user_id(user_id, cookie)
@@ -177,6 +180,23 @@ class DoubanScraper:
         )
         time.sleep(delay)
 
+    def _book_exists_in_db(self, douban_id: str) -> bool:
+        """
+        检查书籍是否已在数据库中存在
+        
+        Args:
+            douban_id: 豆瓣书籍ID
+            
+        Returns:
+            bool: 是否存在
+        """
+        if not self.database:
+            return False
+        
+        with self.database.session_factory() as session:
+            existing_book = session.query(DoubanBook).filter_by(douban_id=douban_id).first()
+            return existing_book is not None
+
     def get_wish_list(self) -> List[Dict[str, Any]]:
         """
         获取「想读」书单
@@ -238,12 +258,23 @@ class DoubanScraper:
                     break
 
                 # progress.update(item_task, total=len(items), completed=0)
+                page_books = []
                 for item in items:
                     book_info = self.parse_book_info(item)
                     if book_info:
+                        page_books.append(book_info)
                         books.append(book_info)
                     # progress.update(item_task, advance=1)
                 # progress.remove_task(item_task)
+
+                # 检查这一页的最后一本书是否已在数据库中存在
+                if page_books and self.database:
+                    last_book = page_books[-1]
+                    last_douban_id = last_book.get('douban_id')
+                    if last_douban_id and self._book_exists_in_db(last_douban_id):
+                        self.logger.info(f"第 {page} 页最后一本书 {last_book.get('title')} (ID: {last_douban_id}) 已存在数据库中，后续页面可能也已爬取过，终止爬取")
+                        has_next = False
+                        break
 
                 next_link = soup.select_one('span.next a')
                 has_next = next_link is not None
