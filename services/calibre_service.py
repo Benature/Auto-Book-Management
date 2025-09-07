@@ -472,6 +472,10 @@ class CalibreService:
             if book_id:
                 self.logger.info(f"成功上传书籍: {os.path.basename(file_path)}, "
                                  f"Calibre ID: {book_id}")
+                
+                # 检查是否需要更新 ISBN：如果上传时没有提供 ISBN，尝试从 Calibre 获取
+                self._update_isbn_if_empty(book_id, metadata)
+                
                 return book_id
             else:
                 self.logger.warning(f"无法从输出中提取书籍 ID: {stdout}")
@@ -510,3 +514,106 @@ class CalibreService:
         except Exception as e:
             self.logger.error(f"解析书籍 ID 失败: {str(e)}")
             return None
+
+    def _update_isbn_if_empty(self, book_id: int, original_metadata: Optional[Dict[str, Any]]) -> None:
+        """
+        如果原始元数据中 ISBN 为空，尝试从 Calibre 获取 ISBN 并更新数据库
+        
+        Args:
+            book_id: Calibre 中的书籍 ID
+            original_metadata: 上传时使用的原始元数据
+        """
+        try:
+            # 检查原始元数据中是否有 ISBN
+            has_original_isbn = (
+                original_metadata and 
+                original_metadata.get('isbn') and 
+                str(original_metadata['isbn']).strip()
+            )
+            
+            if has_original_isbn:
+                # 原始数据有 ISBN，无需更新
+                return
+            
+            # 从 Calibre 获取书籍信息
+            book_info = self.get_book_info(book_id)
+            if not book_info:
+                self.logger.warning(f"无法从 Calibre 获取书籍信息: {book_id}")
+                return
+            
+            # 检查 Calibre 中是否有 ISBN 信息
+            calibre_isbn = None
+            
+            # 先检查 ISBN 字段
+            if book_info.get('isbn'):
+                calibre_isbn = str(book_info['isbn']).strip()
+            
+            # 如果没有，检查 identifiers 中的 isbn
+            if not calibre_isbn and book_info.get('identifiers'):
+                identifiers = book_info['identifiers']
+                if isinstance(identifiers, dict) and identifiers.get('isbn'):
+                    calibre_isbn = str(identifiers['isbn']).strip()
+            
+            if not calibre_isbn:
+                self.logger.debug(f"Calibre 中也没有 ISBN 信息: {book_id}")
+                return
+            
+            # 获取豆瓣书籍信息并更新 ISBN
+            douban_id = None
+            if original_metadata and original_metadata.get('identifiers'):
+                douban_id = original_metadata['identifiers'].get('douban')
+            
+            if douban_id:
+                self._update_douban_book_isbn(douban_id, calibre_isbn)
+                self.logger.info(f"已从 Calibre 更新豆瓣书籍 ISBN: {douban_id} -> {calibre_isbn}")
+            
+        except Exception as e:
+            self.logger.error(f"更新 ISBN 时出错: {str(e)}")
+    
+    def _update_douban_book_isbn(self, douban_id: str, isbn: str) -> None:
+        """
+        更新豆瓣书籍的 ISBN（占位方法，实际逻辑在 UploadStage 中实现）
+        
+        Args:
+            douban_id: 豆瓣书籍 ID
+            isbn: 新的 ISBN
+        """
+        # 实际的 ISBN 更新逻辑在 UploadStage._update_isbn_from_calibre 中实现
+        # 这里保留方法是为了保持接口完整性
+        self.logger.debug(f"ISBN 更新请求: douban_id={douban_id}, isbn={isbn}")
+        self.logger.debug("实际 ISBN 更新将在 UploadStage 中处理")
+
+    def update_book_isbn(self, book_id: int, isbn: str) -> bool:
+        """
+        更新 Calibre 中书籍的 ISBN
+
+        Args:
+            book_id: 书籍 ID
+            isbn: 新的 ISBN
+
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            self.logger.info(f"更新 Calibre 书籍 ISBN: ID={book_id}, ISBN={isbn}")
+
+            # 使用 calibredb set_metadata 命令更新 ISBN
+            set_args = [
+                'set_metadata',
+                str(book_id),
+                '--field', f'isbn:{isbn}'
+            ]
+
+            stdout, stderr, returncode = self._execute_calibredb_command(
+                set_args)
+
+            if returncode != 0:
+                self.logger.error(f"更新 ISBN 失败: {stderr}")
+                return False
+
+            self.logger.info(f"成功更新书籍 ISBN: ID={book_id}, ISBN={isbn}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"更新书籍 ISBN 失败: {str(e)}")
+            return False

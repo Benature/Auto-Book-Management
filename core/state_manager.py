@@ -37,10 +37,11 @@ class BookStateManager:
 
         # 搜索阶段
         BookStatus.SEARCH_QUEUED:
-        {BookStatus.SEARCH_ACTIVE, BookStatus.FAILED_PERMANENT},
+        {BookStatus.SEARCH_ACTIVE, BookStatus.SKIPPED_EXISTS, BookStatus.FAILED_PERMANENT},
         BookStatus.SEARCH_ACTIVE: {
             BookStatus.SEARCH_COMPLETE,
             BookStatus.SEARCH_NO_RESULTS,
+            BookStatus.SKIPPED_EXISTS,  # Calibre中已存在
             BookStatus.FAILED_PERMANENT,
             BookStatus.SEARCH_QUEUED  # 重试时回退
         },

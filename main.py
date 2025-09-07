@@ -198,7 +198,7 @@ class DoubanZLibraryCalibrer:
         # 搜索阶段
         zlib_config = self.config_manager.get_zlibrary_config()
         search_stage = SearchStage(
-            self.state_manager, self.zlibrary_service,
+            self.state_manager, self.zlibrary_service, self.calibre_service,
             min_match_score=zlib_config.get('min_match_score', 0.6)
         )
         self.pipeline_manager.register_stage(search_stage)

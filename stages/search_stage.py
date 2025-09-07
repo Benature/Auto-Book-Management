@@ -12,6 +12,7 @@ from core.pipeline import (BaseStage, NetworkError, ProcessingError,
 from core.state_manager import BookStateManager
 from db.models import BookStatus, DoubanBook, DownloadQueue, ZLibraryBook
 from services.zlibrary_service import ZLibraryService
+from services.calibre_service import CalibreService
 
 
 class SearchStage(BaseStage):
@@ -19,6 +20,7 @@ class SearchStage(BaseStage):
 
     def __init__(self, state_manager: BookStateManager,
                  zlibrary_service: ZLibraryService,
+                 calibre_service: CalibreService,
                  min_match_score: float = 0.6):
         """
         初始化搜索阶段
@@ -26,13 +28,17 @@ class SearchStage(BaseStage):
         Args:
             state_manager: 状态管理器
             zlibrary_service: Z-Library服务实例
+            calibre_service: Calibre服务实例
             min_match_score: 最低匹配分数阈值
         """
         super().__init__("search", state_manager)
         self.zlibrary_service = zlibrary_service
+        self.calibre_service = calibre_service
         self.min_match_score = min_match_score
         # 跟踪当前处理是否找到符合阈值的结果
         self._found_qualifying_results = False
+        # 跟踪当前处理是否在Calibre中已存在
+        self._calibre_exists = False
 
     def can_process(self, book: DoubanBook) -> bool:
         """
@@ -51,7 +57,7 @@ class SearchStage(BaseStage):
 
     def process(self, book: DoubanBook) -> bool:
         """
-        处理书籍 - 搜索Z-Library
+        处理书籍 - 先检查Calibre，再搜索Z-Library
         
         Args:
             book: 书籍对象
@@ -61,8 +67,23 @@ class SearchStage(BaseStage):
         """
         # 重置标志位
         self._found_qualifying_results = False
+        self._calibre_exists = False
+        
         try:
-            self.logger.info(f"搜索Z-Library: {book.title}")
+            # 首先检查Calibre中是否已存在
+            self.logger.info(f"检查Calibre中是否存在: {book.title}")
+            calibre_match = self.calibre_service.find_best_match(
+                title=book.title,
+                author=book.author,
+                isbn=book.isbn
+            )
+            
+            if calibre_match:
+                self.logger.info(f"书籍在Calibre中已存在: {book.title}, ID: {calibre_match.get('calibre_id')}")
+                self._calibre_exists = True
+                return True
+            
+            self.logger.info(f"Calibre中未找到，开始搜索Z-Library: {book.title}")
 
             # 检查是否已有搜索结果
             with self.state_manager.get_session() as session:
@@ -146,8 +167,11 @@ class SearchStage(BaseStage):
             BookStatus: 下一状态
         """
         if success:
+            # 如果在Calibre中已存在，直接跳过
+            if self._calibre_exists:
+                return BookStatus.SKIPPED_EXISTS
             # 根据是否找到符合阈值的结果决定状态
-            if self._found_qualifying_results:
+            elif self._found_qualifying_results:
                 return BookStatus.SEARCH_COMPLETE
             else:
                 return BookStatus.SEARCH_NO_RESULTS

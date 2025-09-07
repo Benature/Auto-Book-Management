@@ -95,17 +95,35 @@ class ZLibrarySearchService:
         }]
 
     def ensure_connected(self) -> bool:
-        """确保客户端已连接"""
-        try:
-            if self.lib is None:
-                self.logger.info('开始登陆Zlibrary')
-                self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
-                asyncio.run(self.lib.login(self.__email, self.__password))
-            return True
-        except Exception as e:
-            self.logger.error(f"Z-Library连接失败: {str(e)}")
-            self.consecutive_errors += 1
-            raise NetworkError(f"Z-Library连接失败: {str(e)}")
+        """确保客户端已连接，支持重试机制"""
+        max_retries = 3
+        base_delay = 2.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                if self.lib is None:
+                    self.logger.info(f'开始登陆Zlibrary (尝试 {attempt}/{max_retries})')
+                    self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
+                    asyncio.run(self.lib.login(self.__email, self.__password))
+                    self.logger.info('Zlibrary登录成功')
+                return True
+                
+            except Exception as e:
+                error_msg = str(e)
+                self.consecutive_errors += 1
+                
+                if attempt < max_retries:
+                    retry_delay = base_delay * (2 ** (attempt - 1))  # 指数退避
+                    self.logger.warning(f"Z-Library连接失败，{retry_delay}秒后重试第{attempt + 1}次: {error_msg}")
+                    time.sleep(retry_delay)
+                    # 重置lib以便下次重新连接
+                    self.lib = None
+                    continue
+                else:
+                    self.logger.error(f"Z-Library连接失败，已重试{max_retries}次: {error_msg}")
+                    raise NetworkError(f"Z-Library连接失败（重试{max_retries}次后失败）: {error_msg}")
+        
+        return False
 
     def search_books(self,
                      title: str = None,
@@ -526,16 +544,35 @@ class ZLibraryDownloadService:
         self.lib = None
 
     def ensure_connected(self) -> bool:
-        """确保客户端已连接"""
-        try:
-            if self.lib is None:
-                self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
-                asyncio.run(self.lib.login(self.__email, self.__password))
-            return True
-        except Exception as e:
-            self.logger.error(f"Z-Library连接失败: {str(e)}")
-            self.consecutive_errors += 1
-            raise NetworkError(f"Z-Library连接失败: {str(e)}")
+        """确保客户端已连接，支持重试机制"""
+        max_retries = 3
+        base_delay = 2.0
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                if self.lib is None:
+                    self.logger.info(f'开始登陆Zlibrary (尝试 {attempt}/{max_retries})')
+                    self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
+                    asyncio.run(self.lib.login(self.__email, self.__password))
+                    self.logger.info('Zlibrary登录成功')
+                return True
+                
+            except Exception as e:
+                error_msg = str(e)
+                self.consecutive_errors += 1
+                
+                if attempt < max_retries:
+                    retry_delay = base_delay * (2 ** (attempt - 1))  # 指数退避
+                    self.logger.warning(f"Z-Library连接失败，{retry_delay}秒后重试第{attempt + 1}次: {error_msg}")
+                    time.sleep(retry_delay)
+                    # 重置lib以便下次重新连接
+                    self.lib = None
+                    continue
+                else:
+                    self.logger.error(f"Z-Library连接失败，已重试{max_retries}次: {error_msg}")
+                    raise NetworkError(f"Z-Library连接失败（重试{max_retries}次后失败）: {error_msg}")
+        
+        return False
 
     def download_book(self, book_info: Dict[str, Any],
                       output_dir: str) -> Optional[str]:
