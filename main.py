@@ -538,9 +538,20 @@ class DoubanZLibraryCalibrer:
                 scheduler_status['queue_size']
             )
             
+            # 检查是否需要调度下一本书（顺序处理逻辑）
+            self._schedule_next_book_if_needed()
+            
             if active_tasks == 0:
-                self.logger.info("Pipeline处理完成")
-                break
+                # 检查是否还有待处理的书籍
+                if hasattr(self, 'pending_books_queue') and self.pending_books_queue:
+                    self.logger.info(f"当前任务队列为空，但还有 {len(self.pending_books_queue)} 本书等待处理")
+                    # 继续等待，可能有书籍状态还未到达终态
+                    if self._shutdown_event.wait(5):
+                        break
+                    continue
+                else:
+                    self.logger.info("Pipeline处理完成")
+                    break
             
             # 检查是否超时
             elapsed = datetime.now() - start_time
@@ -555,14 +566,20 @@ class DoubanZLibraryCalibrer:
     
     def get_status(self) -> Dict[str, Any]:
         """获取系统状态"""
-        with self.db.session_scope() as session:
-            status = {
-                'running': self._running,
-                'pipeline': pipeline_status,
-                'scheduler': self.task_scheduler.get_status() if hasattr(self, 'task_scheduler') else {},
-                'book_statistics': self.state_manager.get_status_statistics() if hasattr(self, 'state_manager') else {},
-                'error_statistics': self.error_handler.get_error_statistics() if hasattr(self, 'error_handler') else {}
-            }
+        pipeline_status = {
+            'running': False,
+            'active_tasks': 0,
+            'max_workers': 4,
+            'registered_stages': ['data_collection', 'search', 'download', 'upload']
+        }
+        
+        status = {
+            'running': self._running,
+            'pipeline': pipeline_status,
+            'scheduler': self.task_scheduler.get_status() if hasattr(self, 'task_scheduler') else {},
+            'book_statistics': self.state_manager.get_status_statistics() if hasattr(self, 'state_manager') else {},
+            'error_statistics': self.error_handler.get_error_statistics() if hasattr(self, 'error_handler') else {}
+        }
         
         return status
     
@@ -649,7 +666,7 @@ class DoubanZLibraryCalibrer:
     
     def _schedule_pipeline_tasks_for_books(self, books: List[Dict[str, Any]]) -> int:
         """
-        为书籍列表调度Pipeline任务
+        为书籍列表调度Pipeline任务（顺序处理：一次只处理一本书）
         
         Args:
             books: 书籍信息列表 (包含id和status)
@@ -657,42 +674,115 @@ class DoubanZLibraryCalibrer:
         Returns:
             int: 调度的任务数量
         """
-        scheduled_count = 0
+        if not books:
+            return 0
         
-        for book_info in books:
-            book_id = book_info['id']
-            status = book_info['status']
-            title = book_info.get('title', f'书籍ID{book_id}')
-            
-            # 根据书籍状态确定当前需要处理的阶段（只调度一个阶段，其他的由状态管理器自动调度）
-            current_stage = None
-            if status == BookStatus.NEW:
-                current_stage = 'data_collection'
-            elif status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED]:
-                current_stage = 'search'
-            elif status in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]:
-                current_stage = 'download'
-            elif status in [BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED]:
-                current_stage = 'upload'
-            else:
-                self.logger.debug(f"跳过书籍 {title}，状态 {status.value} 不需要调度新任务")
-                continue  # 跳过不需要处理的状态
-            
-            # 只调度当前阶段的任务
-            try:
-                task_id = self.task_scheduler.schedule_task(
-                    book_id=book_id,
-                    stage=current_stage,
-                    priority=TaskPriority.NORMAL
-                )
-                self.logger.debug(f"调度任务: 书籍ID {book_id}, 阶段 {current_stage}, 任务ID {task_id}")
-                scheduled_count += 1
-            except Exception as e:
-                self.logger.warning(f"调度任务失败: 书籍ID {book_id}, 阶段 {current_stage}, 错误: {str(e)}")
-                continue
-                
-        self.logger.info(f"为 {len(books)} 本书调度了 {scheduled_count} 个Pipeline任务")
+        # 保存待处理书籍队列到实例变量
+        self.pending_books_queue = books.copy()
+        
+        # 只调度第一本书的任务
+        first_book = self.pending_books_queue[0]
+        scheduled_count = self._schedule_single_book_task(first_book)
+        
+        if scheduled_count > 0:
+            # 记录当前正在处理的书籍
+            self.current_processing_book = first_book
+            book_title = first_book.get('title', f'书籍ID{first_book["id"]}')
+            self.logger.info(f"开始顺序处理书籍队列，当前处理: {book_title} "
+                           f"(队列中还有 {len(self.pending_books_queue) - 1} 本书等待)")
+        
         return scheduled_count
+    
+    def _schedule_single_book_task(self, book_info: Dict[str, Any]) -> int:
+        """
+        为单本书籍调度当前阶段的任务
+        
+        Args:
+            book_info: 书籍信息
+            
+        Returns:
+            int: 调度的任务数量 (0或1)
+        """
+        book_id = book_info['id']
+        status = book_info['status']
+        title = book_info.get('title', f'书籍ID{book_id}')
+        
+        # 根据书籍状态确定当前需要处理的阶段
+        current_stage = None
+        if status == BookStatus.NEW:
+            current_stage = 'data_collection'
+        elif status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED]:
+            current_stage = 'search'
+        elif status in [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED]:
+            current_stage = 'download'
+        elif status in [BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED]:
+            current_stage = 'upload'
+        else:
+            self.logger.debug(f"跳过书籍 {title}，状态 {status.value} 不需要调度新任务")
+            return 0
+        
+        # 调度当前阶段的任务
+        try:
+            task_id = self.task_scheduler.schedule_task(
+                book_id=book_id,
+                stage=current_stage,
+                priority=TaskPriority.NORMAL
+            )
+            self.logger.info(f"调度任务: 书籍 {title}, 阶段 {current_stage}, 任务ID {task_id}")
+            return 1
+        except Exception as e:
+            self.logger.warning(f"调度任务失败: 书籍ID {book_id}, 阶段 {current_stage}, 错误: {str(e)}")
+            return 0
+    
+    def _schedule_next_book_if_needed(self):
+        """
+        检查当前书籍是否完成，如果完成则调度下一本书
+        """
+        if not hasattr(self, 'pending_books_queue') or not self.pending_books_queue:
+            return
+        
+        if not hasattr(self, 'current_processing_book') or not self.current_processing_book:
+            return
+        
+        current_book_id = self.current_processing_book['id']
+        
+        # 检查当前书籍是否已完成（到达终态）
+        with self.state_manager.get_session() as session:
+            current_book = session.query(DoubanBook).get(current_book_id)
+            if not current_book:
+                return
+            
+            # 终态：已完成、已存在、或永久失败
+            terminal_states = [BookStatus.COMPLETED, BookStatus.SKIPPED_EXISTS, BookStatus.FAILED_PERMANENT]
+            
+            if current_book.status in terminal_states:
+                # 当前书籍已完成，从队列中移除
+                self.pending_books_queue.pop(0)
+                completed_book_title = self.current_processing_book.get('title', f'ID{current_book_id}')
+                self.logger.info(f"书籍处理完成: {completed_book_title} "
+                               f"-> {current_book.status.value}")
+                
+                # 调度下一本书（如果还有）
+                if self.pending_books_queue:
+                    next_book = self.pending_books_queue[0]
+                    scheduled = self._schedule_single_book_task(next_book)
+                    if scheduled > 0:
+                        self.current_processing_book = next_book
+                        next_book_title = next_book.get('title', f'书籍ID{next_book["id"]}')
+                        self.logger.info(f"开始处理下一本书: {next_book_title} "
+                                       f"(队列中还有 {len(self.pending_books_queue) - 1} 本书等待)")
+                    else:
+                        # 如果调度失败，继续尝试下一本
+                        self.current_processing_book = None
+                        self._schedule_next_book_if_needed()
+                else:
+                    # 队列处理完毕
+                    self.current_processing_book = None
+                    self.logger.info("所有书籍处理完成！")
+            else:
+                processing_book_title = self.current_processing_book.get('title', f'ID{current_book_id}')
+                self.logger.debug(f"当前书籍仍在处理中: {processing_book_title} "
+                                f"-> {current_book.status.value}")
 
 
 def main():

@@ -522,36 +522,57 @@ class BookStateManager:
         if not self.lark_service:
             return
 
+        # 获取状态的中文描述
+        status_descriptions = {
+            BookStatus.NEW:
+            "新发现",
+            # BookStatus.DETAIL_FETCHING:
+            # "获取详情中",
+            BookStatus.DETAIL_COMPLETE:
+            "详情获取完成",
+            # BookStatus.SEARCH_QUEUED: "排队搜索",
+            # BookStatus.SEARCH_ACTIVE: "搜索中",
+            BookStatus.SEARCH_COMPLETE:
+            "搜索完成",
+            BookStatus.SEARCH_NO_RESULTS:
+            "搜索无结果",
+            # BookStatus.DOWNLOAD_QUEUED:
+            # "排队下载",
+            # BookStatus.DOWNLOAD_ACTIVE:
+            # "下载中",
+            BookStatus.DOWNLOAD_COMPLETE:
+            "下载完成",
+            BookStatus.DOWNLOAD_FAILED:
+            "下载失败",
+            # BookStatus.UPLOAD_QUEUED:
+            # "排队上传",
+            # BookStatus.UPLOAD_ACTIVE:
+            # "上传中",
+            BookStatus.UPLOAD_COMPLETE:
+            "上传完成",
+            BookStatus.UPLOAD_FAILED:
+            "上传失败",
+            BookStatus.COMPLETED:
+            "✅ 完成",
+            BookStatus.SKIPPED_EXISTS:
+            "跳过(已存在)",
+            BookStatus.FAILED_PERMANENT:
+            "❌ 永久失败"
+        }
+
+        # 不发送通知的状态
+        if new_status not in status_descriptions:
+            return
+
         try:
-            # 获取状态的中文描述
-            status_descriptions = {
-                BookStatus.NEW: "新发现",
-                BookStatus.DETAIL_FETCHING: "获取详情中",
-                BookStatus.DETAIL_COMPLETE: "详情获取完成",
-                BookStatus.SEARCH_QUEUED: "排队搜索",
-                BookStatus.SEARCH_ACTIVE: "搜索中",
-                BookStatus.SEARCH_COMPLETE: "搜索完成",
-                BookStatus.SEARCH_NO_RESULTS: "搜索无结果",
-                BookStatus.DOWNLOAD_QUEUED: "排队下载",
-                BookStatus.DOWNLOAD_ACTIVE: "下载中",
-                BookStatus.DOWNLOAD_COMPLETE: "下载完成",
-                BookStatus.DOWNLOAD_FAILED: "下载失败",
-                BookStatus.UPLOAD_QUEUED: "排队上传",
-                BookStatus.UPLOAD_ACTIVE: "上传中",
-                BookStatus.UPLOAD_COMPLETE: "上传完成",
-                BookStatus.UPLOAD_FAILED: "上传失败",
-                BookStatus.COMPLETED: "✅ 完成",
-                BookStatus.SKIPPED_EXISTS: "跳过(已存在)",
-                BookStatus.FAILED_PERMANENT: "❌ 永久失败"
-            }
 
             old_desc = status_descriptions.get(old_status, old_status.value)
             new_desc = status_descriptions.get(new_status, new_status.value)
 
             # 构建消息内容
             message_parts = [
-                f"📚 **{book.title}**", f"作者: {book.author or '未知'}",
-                f"状态: {old_desc} → {new_desc}", f"原因: {change_reason}"
+                f"📚 **{book.title}**", f"✍️ 作者: {book.author or '未知'}",
+                f"🔄 状态: {old_desc} → {new_desc}", f"💡 原因: {change_reason}"
             ]
 
             if processing_time:
