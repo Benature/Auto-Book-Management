@@ -127,12 +127,14 @@ class CalibreService:
                 authors_data = book_data.get('authors', [])
                 if isinstance(authors_data, str):
                     # 如果是字符串，按 ' & ' 分割成列表
-                    authors_list = [author.strip() for author in authors_data.split(' & ')]
+                    authors_list = [
+                        author.strip() for author in authors_data.split(' & ')
+                    ]
                 elif isinstance(authors_data, list):
                     authors_list = authors_data
                 else:
                     authors_list = []
-                
+
                 book_info = {
                     'calibre_id': book_data.get('id', 0),
                     'title': book_data.get('title', ''),
@@ -216,7 +218,7 @@ class CalibreService:
                 search_args)
 
             if returncode != 0:
-                self.logger.error(f"搜索命令失败: {stderr}")
+                self.logger.warning(f"搜索失败: {stderr}")
                 return []
 
             # 解析搜索结果
@@ -472,10 +474,10 @@ class CalibreService:
             if book_id:
                 self.logger.info(f"成功上传书籍: {os.path.basename(file_path)}, "
                                  f"Calibre ID: {book_id}")
-                
+
                 # 检查是否需要更新 ISBN：如果上传时没有提供 ISBN，尝试从 Calibre 获取
                 self._update_isbn_if_empty(book_id, metadata)
-                
+
                 return book_id
             else:
                 self.logger.warning(f"无法从输出中提取书籍 ID: {stdout}")
@@ -498,13 +500,13 @@ class CalibreService:
         try:
             # 查找各种可能的输出格式
             patterns = [
-                r'Added book ids?:\s*(\d+)',           # 英文: Added book ids: 123
-                r'Book id of imported book:\s*(\d+)',   # 英文: Book id of imported book: 123
-                r'已加入的书籍id:\s*(\d+)',              # 中文: 已加入的书籍id: 1420
-                r'书籍id:\s*(\d+)',                     # 简化中文: 书籍id: 1420
-                r'id:\s*(\d+)',                        # 更简化: id: 1420
+                r'Added book ids?:\s*(\d+)',  # 英文: Added book ids: 123
+                r'Book id of imported book:\s*(\d+)',  # 英文: Book id of imported book: 123
+                r'已加入的书籍id:\s*(\d+)',  # 中文: 已加入的书籍id: 1420
+                r'书籍id:\s*(\d+)',  # 简化中文: 书籍id: 1420
+                r'id:\s*(\d+)',  # 更简化: id: 1420
             ]
-            
+
             for pattern in patterns:
                 match = re.search(pattern, output, re.IGNORECASE)
                 if match:
@@ -515,7 +517,9 @@ class CalibreService:
             self.logger.error(f"解析书籍 ID 失败: {str(e)}")
             return None
 
-    def _update_isbn_if_empty(self, book_id: int, original_metadata: Optional[Dict[str, Any]]) -> None:
+    def _update_isbn_if_empty(
+            self, book_id: int,
+            original_metadata: Optional[Dict[str, Any]]) -> None:
         """
         如果原始元数据中 ISBN 为空，尝试从 Calibre 获取 ISBN 并更新数据库
         
@@ -525,51 +529,50 @@ class CalibreService:
         """
         try:
             # 检查原始元数据中是否有 ISBN
-            has_original_isbn = (
-                original_metadata and 
-                original_metadata.get('isbn') and 
-                str(original_metadata['isbn']).strip()
-            )
-            
+            has_original_isbn = (original_metadata
+                                 and original_metadata.get('isbn')
+                                 and str(original_metadata['isbn']).strip())
+
             if has_original_isbn:
                 # 原始数据有 ISBN，无需更新
                 return
-            
+
             # 从 Calibre 获取书籍信息
             book_info = self.get_book_info(book_id)
             if not book_info:
                 self.logger.warning(f"无法从 Calibre 获取书籍信息: {book_id}")
                 return
-            
+
             # 检查 Calibre 中是否有 ISBN 信息
             calibre_isbn = None
-            
+
             # 先检查 ISBN 字段
             if book_info.get('isbn'):
                 calibre_isbn = str(book_info['isbn']).strip()
-            
+
             # 如果没有，检查 identifiers 中的 isbn
             if not calibre_isbn and book_info.get('identifiers'):
                 identifiers = book_info['identifiers']
                 if isinstance(identifiers, dict) and identifiers.get('isbn'):
                     calibre_isbn = str(identifiers['isbn']).strip()
-            
+
             if not calibre_isbn:
                 self.logger.debug(f"Calibre 中也没有 ISBN 信息: {book_id}")
                 return
-            
+
             # 获取豆瓣书籍信息并更新 ISBN
             douban_id = None
             if original_metadata and original_metadata.get('identifiers'):
                 douban_id = original_metadata['identifiers'].get('douban')
-            
+
             if douban_id:
                 self._update_douban_book_isbn(douban_id, calibre_isbn)
-                self.logger.info(f"已从 Calibre 更新豆瓣书籍 ISBN: {douban_id} -> {calibre_isbn}")
-            
+                self.logger.info(
+                    f"已从 Calibre 更新豆瓣书籍 ISBN: {douban_id} -> {calibre_isbn}")
+
         except Exception as e:
             self.logger.error(f"更新 ISBN 时出错: {str(e)}")
-    
+
     def _update_douban_book_isbn(self, douban_id: str, isbn: str) -> None:
         """
         更新豆瓣书籍的 ISBN（占位方法，实际逻辑在 UploadStage 中实现）
@@ -600,8 +603,7 @@ class CalibreService:
             # 使用 calibredb set_metadata 命令更新 ISBN
             set_args = [
                 'set_metadata',
-                str(book_id),
-                '--field', f'isbn:{isbn}'
+                str(book_id), '--field', f'isbn:{isbn}'
             ]
 
             stdout, stderr, returncode = self._execute_calibredb_command(

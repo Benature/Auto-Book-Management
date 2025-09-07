@@ -21,9 +21,11 @@ from utils.logger import get_logger
 
 class DoubanAccessDeniedException(Exception):
     """豆瓣访问被拒绝异常（403错误）"""
+
     def __init__(self, message: str = "豆瓣返回403错误，访问被拒绝"):
         self.message = message
         super().__init__(self.message)
+
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
@@ -58,7 +60,7 @@ class DoubanScraper:
         """
         self.logger = get_logger("douban_scraper")
         self.cookie = cookie
-        self.max_pages = max_pages
+        self.max_pages = max_pages or 0
         self.proxy = proxy
         self.min_delay = min_delay
         self.max_delay = max_delay
@@ -127,7 +129,9 @@ class DoubanScraper:
         assert user_id, "cookie 缺少 user_id 信息（dbcl2）"
         return str(user_id)
 
-    def _smart_delay(self, base_min: float = None, base_max: float = None, 
+    def _smart_delay(self,
+                     base_min: float = None,
+                     base_max: float = None,
                      request_type: str = "normal") -> None:
         """
         智能延迟，根据请求类型、错误次数和请求频率动态调整延迟
@@ -140,33 +144,37 @@ class DoubanScraper:
         # 使用传入的延迟时间或默认值
         min_delay = base_min or self.min_delay
         max_delay = base_max or self.max_delay
-        
+
         # 根据请求类型调整延迟
         if request_type == "page":
             # 页面请求需要更长延迟
             min_delay = max(min_delay * 2, 3.0)
             max_delay = max(max_delay * 2, 7.0)
-        elif request_type == "detail": 
+        elif request_type == "detail":
             # 详情页请求中等延迟
             min_delay = max(min_delay * 1.5, 2.0)
             max_delay = max(max_delay * 1.5, 5.0)
-        
+
         # 根据连续错误增加延迟
         if self.consecutive_errors > 0:
-            error_multiplier = min(1.5 ** self.consecutive_errors, 5.0)  # 最多5倍延迟
+            error_multiplier = min(1.5**self.consecutive_errors, 5.0)  # 最多5倍延迟
             min_delay *= error_multiplier
             max_delay *= error_multiplier
-            self.logger.warning(f"连续错误 {self.consecutive_errors} 次，增加延迟至 {min_delay:.1f}-{max_delay:.1f}秒")
-        
+            self.logger.warning(
+                f"连续错误 {self.consecutive_errors} 次，增加延迟至 {min_delay:.1f}-{max_delay:.1f}秒"
+            )
+
         # 根据请求频率适当增加延迟（每10个请求后稍微增加延迟）
         if self.request_count > 0 and self.request_count % 10 == 0:
             frequency_multiplier = 1.2
             min_delay *= frequency_multiplier
             max_delay *= frequency_multiplier
-        
+
         # 生成随机延迟并执行
         delay = random.uniform(min_delay, max_delay)
-        self.logger.debug(f"延迟 {delay:.2f} 秒 (类型: {request_type}, 错误: {self.consecutive_errors}, 请求: {self.request_count})")
+        self.logger.debug(
+            f"延迟 {delay:.2f} 秒 (类型: {request_type}, 错误: {self.consecutive_errors}, 请求: {self.request_count})"
+        )
         time.sleep(delay)
 
     def get_wish_list(self) -> List[Dict[str, Any]]:
@@ -196,26 +204,29 @@ class DoubanScraper:
                     # 更新 User-Agent
                     self.session.headers.update(
                         {'User-Agent': random.choice(USER_AGENTS)})
-                    
+
                     self.request_count += 1
                     response = self.session.get(url, timeout=15)
-                    
+
                     # 检查是否返回403错误
                     if response.status_code == 403:
                         self.logger.error(f"豆瓣返回403错误，访问被拒绝，URL: {url}")
-                        raise DoubanAccessDeniedException(f"豆瓣访问被拒绝，状态码: 403，URL: {url}")
-                    
+                        raise DoubanAccessDeniedException(
+                            f"豆瓣访问被拒绝，状态码: 403，URL: {url}")
+
                     response.raise_for_status()
                     text = response.text
-                    
+
                     # 请求成功，重置错误计数
                     self.consecutive_errors = 0
-                    
+
                 except requests.RequestException as e:
                     self.logger.error(f"请求失败: {str(e)}")
                     self.consecutive_errors += 1
                     # 出错时额外延迟
-                    self._smart_delay(base_min=5.0, base_max=10.0, request_type="error")
+                    self._smart_delay(base_min=5.0,
+                                      base_max=10.0,
+                                      request_type="error")
                     break
 
                 soup = BeautifulSoup(text, 'lxml')
@@ -334,31 +345,35 @@ class DoubanScraper:
             Optional[Dict[str, Any]]: 书籍详细信息字典，获取失败则返回 None
         """
         self.logger.debug(f"获取书籍详情: {book_douban_url}")
-        
+
         try:
             # 智能延迟
             self._smart_delay(request_type="detail")
             # 更新 User-Agent
-            self.session.headers.update({'User-Agent': random.choice(USER_AGENTS)})
-            
+            self.session.headers.update(
+                {'User-Agent': random.choice(USER_AGENTS)})
+
             self.request_count += 1
             response = self.session.get(book_douban_url, timeout=10)
-            
+
             # 检查是否返回403错误
             if response.status_code == 403:
                 self.logger.error(f"豆瓣返回403错误，访问被拒绝，URL: {book_douban_url}")
-                raise DoubanAccessDeniedException(f"豆瓣访问被拒绝，状态码: 403，URL: {book_douban_url}")
-            
+                raise DoubanAccessDeniedException(
+                    f"豆瓣访问被拒绝，状态码: 403，URL: {book_douban_url}")
+
             response.raise_for_status()
-            
+
             # 请求成功，重置错误计数
             self.consecutive_errors = 0
-            
+
         except requests.RequestException as e:
             self.logger.error(f"获取书籍详情失败: {str(e)}")
             self.consecutive_errors += 1
             # 出错时额外延迟后返回None
-            self._smart_delay(base_min=5.0, base_max=10.0, request_type="error")
+            self._smart_delay(base_min=5.0,
+                              base_max=10.0,
+                              request_type="error")
             return None
 
         soup = BeautifulSoup(response.text, 'lxml')

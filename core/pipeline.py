@@ -146,8 +146,8 @@ class BaseStage(abc.ABC):
             if not self.can_process(book):
                 error_msg = f"无法处理书籍: {book.title}, 状态: {book.status.value}"
                 self.logger.warning(error_msg)
-                # 抛出包含状态信息的异常，便于任务调度器识别状态不匹配错误
-                raise ProcessingError(error_msg, "status_mismatch", retryable=True)
+                # 对于状态不匹配错误，不应该重试，而是直接跳过
+                raise ProcessingError(error_msg, "status_mismatch", retryable=False)
 
             # 处理状态转换逻辑（仅在特定情况下需要预转换）
             if self.name == "search" and book.status == BookStatus.DETAIL_COMPLETE:

@@ -215,10 +215,8 @@ class ZLibrarySearchService:
         return applicable_strategies
 
     async def _async_search_books(self, q, count: int = 10):
-        # 确保已连接和登录
-        if self.lib is None:
-            self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
-            await self.lib.login(self.__email, self.__password)
+        # 确保已连接和登录（使用同步方法确保重试机制）
+        self.ensure_connected()
 
         paginator = await self.lib.search(q=q)
         await paginator.next()
