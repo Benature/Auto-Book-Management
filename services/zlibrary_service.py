@@ -107,6 +107,7 @@ class ZLibrarySearchService:
                     self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
                     asyncio.run(self.lib.login(self.__email, self.__password))
                     self.logger.info('Zlibrary登录成功')
+                # 无论是新创建连接还是已有连接，都应该返回True
                 return True
                 
             except Exception as e:
@@ -216,7 +217,8 @@ class ZLibrarySearchService:
 
     async def _async_search_books(self, q, count: int = 10):
         # 确保已连接和登录（使用同步方法确保重试机制）
-        self.ensure_connected()
+        if not self.ensure_connected():
+            raise NetworkError("无法连接到Z-Library服务")
 
         paginator = await self.lib.search(q=q)
         await paginator.next()
@@ -554,6 +556,7 @@ class ZLibraryDownloadService:
                     self.lib = zlibrary.AsyncZlib(proxy_list=self.proxy_list)
                     asyncio.run(self.lib.login(self.__email, self.__password))
                     self.logger.info('Zlibrary登录成功')
+                # 无论是新创建连接还是已有连接，都应该返回True
                 return True
                 
             except Exception as e:

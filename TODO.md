@@ -1,4 +1,5 @@
 - [ ] 把所有test文件都挪到tests目录下
 - [ ] 跑通上传书籍流程
 - [ ] 完善匹配度打分逻辑（人为检查）
-- [ ] 飞书卡片使用markdown而非text纯文本
+- [x] 飞书卡片使用markdown而非text纯文本
+- [ ] 老的 download url 可能需要替换 domain
