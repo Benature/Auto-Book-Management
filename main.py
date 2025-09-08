@@ -156,7 +156,8 @@ class DoubanZLibraryCalibrer:
             max_pages=douban_config.get('max_pages'),
             proxy=zlib_config.get('proxy_list', [None])[0],
             min_delay=douban_config.get('min_delay', 1.0),
-            max_delay=douban_config.get('max_delay', 3.0)
+            max_delay=douban_config.get('max_delay', 3.0),
+            database=self.db
         )
         
         # Z-Library服务

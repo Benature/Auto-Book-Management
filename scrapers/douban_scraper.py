@@ -192,9 +192,10 @@ class DoubanScraper:
         """
         if not self.database:
             return False
-        
+
         with self.database.session_factory() as session:
-            existing_book = session.query(DoubanBook).filter_by(douban_id=douban_id).first()
+            existing_book = session.query(DoubanBook).filter_by(
+                douban_id=douban_id).first()
             return existing_book is not None
 
     def get_wish_list(self) -> List[Dict[str, Any]]:
@@ -266,13 +267,25 @@ class DoubanScraper:
                         books.append(book_info)
                     # progress.update(item_task, advance=1)
                 # progress.remove_task(item_task)
-
-                # 检查这一页的最后一本书是否已在数据库中存在
+                # 检查这一页中已存在的书籍比例，决定是否继续爬取
+                print(f"{self.database=}")
                 if page_books and self.database:
-                    last_book = page_books[-1]
-                    last_douban_id = last_book.get('douban_id')
-                    if last_douban_id and self._book_exists_in_db(last_douban_id):
-                        self.logger.info(f"第 {page} 页最后一本书 {last_book.get('title')} (ID: {last_douban_id}) 已存在数据库中，后续页面可能也已爬取过，终止爬取")
+                    existing_count = 0
+                    for book in page_books:
+                        douban_id = book.get('douban_id')
+                        if douban_id and self._book_exists_in_db(douban_id):
+                            existing_count += 1
+
+                    existing_ratio = existing_count / len(page_books)
+                    self.logger.debug(
+                        f"第 {page} 页书籍重复率: {existing_count}/{len(page_books)} ({existing_ratio:.1%})"
+                    )
+
+                    # 如果当前页面80%以上的书籍都已存在，可能已经爬取过后续页面，终止爬取
+                    if existing_ratio >= 0.8:
+                        self.logger.info(
+                            f"第 {page} 页重复率过高 ({existing_ratio:.1%})，后续页面可能也已爬取过，终止爬取"
+                        )
                         has_next = False
                         break
 
@@ -298,6 +311,7 @@ class DoubanScraper:
             Optional[Dict[str, Any]]: 书籍信息字典，解析失败则返回 None
         """
         try:
+            # print(f"解析书籍信息: {item}")
             # 获取书名和链接
             title_element = item.select_one('div.info h2 a')
             if not title_element:
