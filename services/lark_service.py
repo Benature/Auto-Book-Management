@@ -10,7 +10,6 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-import requests
 from larkpy import LarkBot
 
 from utils.logger import get_logger
@@ -31,46 +30,6 @@ class LarkService:
         self.webhook_url = webhook_url
         self.secret = secret
         self.bot = LarkBot(webhook_url)
-
-    def send_text_message(self, content: str) -> bool:
-        """
-        发送纯文本消息
-        
-        Args:
-            content: 消息内容
-            
-        Returns:
-            bool: 发送是否成功
-        """
-        message = {"msg_type": "text", "content": {"text": content}}
-        return self._send_message(message)
-
-    def send_rich_text_message(self, title: str, content: str) -> bool:
-        """
-        发送富文本消息
-        
-        Args:
-            title: 消息标题
-            content: 消息内容（支持部分 markdown 语法）
-            
-        Returns:
-            bool: 发送是否成功
-        """
-        message = {
-            "msg_type": "post",
-            "content": {
-                "post": {
-                    "zh_cn": {
-                        "title": title,
-                        "content": [[{
-                            "tag": "text",
-                            "text": content
-                        }]]
-                    }
-                }
-            }
-        }
-        return self._send_message(message)
 
     def send_card_message(self, title: str, elements: List[Dict[str,
                                                                 Any]]) -> bool:
@@ -101,82 +60,6 @@ class LarkService:
             }
         }
         return self._send_message(message)
-
-    def send_book_notification(self,
-                               book_info: Dict[str, Any],
-                               download_status: bool,
-                               error_message: Optional[str] = None) -> bool:
-        """
-        发送书籍下载通知
-        
-        Args:
-            book_info: 书籍信息
-            download_status: 下载状态
-            error_message: 错误信息（如果有）
-            
-        Returns:
-            bool: 发送是否成功
-        """
-        # 构建卡片元素
-        elements = [{
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": f"**书名**: {book_info.get('title', '未知')}"
-            }
-        }, {
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": f"**作者**: {book_info.get('author', '未知')}"
-            }
-        }]
-
-        # 添加 ISBN 信息（如果有）
-        if book_info.get('isbn'):
-            elements.append({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**ISBN**: {book_info.get('isbn', '')}"
-                }
-            })
-
-        # 添加状态信息
-        status_text = "✅ 下载成功" if download_status else "❌ 下载失败"
-        elements.append({
-            "tag": "div",
-            "text": {
-                "tag": "lark_md",
-                "content": f"**状态**: {status_text}"
-            }
-        })
-
-        # 如果下载失败，添加错误信息
-        if not download_status and error_message:
-            elements.append({
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": f"**错误**: {error_message}"
-                }
-            })
-
-        # 添加时间信息
-        elements.append({
-            "tag":
-            "note",
-            "elements": [{
-                "tag":
-                "plain_text",
-                "content":
-                f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            }]
-        })
-
-        # 发送卡片消息
-        title = "📚 豆瓣书籍下载通知"
-        return self.send_card_message(title, elements)
 
     def send_403_error_notification(self, error_message: str,
                                     url: str) -> bool:
@@ -333,8 +216,6 @@ class LarkService:
             bool: 发送是否成功
         """
         try:
-            headers = {'Content-Type': 'application/json'}
-
             # 添加签名（如果有密钥）
             if self.secret:
                 # 飞书签名实现
@@ -342,10 +223,7 @@ class LarkService:
 
             self.logger.info(
                 f"发送飞书消息: {json.dumps(message, ensure_ascii=False)[:100]}...")
-            response = requests.post(self.webhook_url,
-                                     headers=headers,
-                                     data=json.dumps(message),
-                                     timeout=10)
+            response = self.bot.send(message)
             response.raise_for_status()
             result = response.json()
 
