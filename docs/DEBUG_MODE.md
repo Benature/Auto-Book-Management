@@ -8,13 +8,13 @@ Debug模式是为了方便开发和调试而添加的特殊运行模式，它会
 
 ```bash
 # 启用debug模式运行一次
-python main_v2.py --debug --once
+python main.py --debug -o
 
 # 启用debug模式运行守护进程
-python main_v2.py --debug --daemon
+python main.py --debug --daemon
 
 # 查看所有选项
-python main_v2.py --help
+python main.py --help
 ```
 
 ## Debug模式的限制

@@ -13,7 +13,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from core.pipeline import (AuthError, NetworkError, ProcessingError,
+from core.pipeline import (AuthError, DownloadLimitExhaustedError,
+                           NetworkError, ProcessingError,
                            ResourceNotFoundError)
 from core.state_manager import BookStateManager
 from db.models import BookStatus, BookStatusHistory, DoubanBook, ProcessingTask
@@ -155,6 +156,16 @@ class ErrorClassifier:
             severity=ErrorSeverity.MEDIUM,
             retry_strategy=RetryStrategy.NO_RETRY,
             retryable=False
+        ),
+        
+        # 下载限制相关错误
+        "download_limit": ErrorInfo(
+            error_type="download_limit_exhausted",
+            error_message="下载次数用完",
+            severity=ErrorSeverity.MEDIUM,
+            retry_strategy=RetryStrategy.NO_RETRY,
+            retryable=False,
+            requires_human_intervention=True
         )
     }
     
@@ -173,7 +184,9 @@ class ErrorClassifier:
         error_message = str(error).lower()
         
         # 检查异常类型
-        if isinstance(error, NetworkError):
+        if isinstance(error, DownloadLimitExhaustedError):
+            return cls.ERROR_PATTERNS["download_limit"]
+        elif isinstance(error, NetworkError):
             return cls._get_network_error_info(error_message)
         elif isinstance(error, AuthError):
             return cls._get_auth_error_info(error_message)

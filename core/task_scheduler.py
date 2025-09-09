@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from core.error_handler import ErrorClassifier
 from core.state_manager import BookStateManager
 from db.models import BookStatus, DoubanBook, ProcessingTask
 from utils.logger import get_logger
@@ -333,7 +334,7 @@ class TaskScheduler:
                         
                 except Exception as e:
                     self.logger.error(f"任务执行异常: ID {task.id}, 异常: {str(e)}")
-                    self._handle_task_failure(task, str(e))
+                    self._handle_task_failure(task, str(e), e)
                 finally:
                     # 从活跃任务列表移除
                     with self._active_lock:
@@ -348,14 +349,26 @@ class TaskScheduler:
             self.logger.error(f"执行任务失败: ID {task.id}, 错误: {str(e)}")
             self._update_task_status(task.id, TaskStatus.FAILED, error_message=str(e))
     
-    def _handle_task_failure(self, task: ScheduledTask, error_message: str = ""):
+    def _handle_task_failure(self, task: ScheduledTask, error_message: str = "", exception: Exception = None):
         """
         处理任务失败
         
         Args:
             task: 失败的任务
             error_message: 错误信息
+            exception: 异常对象
         """
+        # 检查是否为非重试性错误
+        if exception:
+            error_info = ErrorClassifier.classify_error(exception)
+            if not error_info.retryable:
+                self.logger.warning(f"检测到非重试性错误: {error_info.error_type}, 任务ID {task.id}")
+                self._update_task_status(task.id, TaskStatus.FAILED, 
+                                       error_message=f"非重试性错误: {error_message}")
+                self._stats['total_failed'] += 1
+                self.logger.error(f"任务最终失败 (非重试性错误): ID {task.id}, 错误类型: {error_info.error_type}")
+                return
+        
         task.retry_count += 1
         self._stats['total_retries'] += 1
         
