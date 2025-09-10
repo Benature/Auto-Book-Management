@@ -46,7 +46,7 @@ class UploadStage(BaseStage):
         """
         with self.state_manager.get_session() as session:
             # 重新查询数据库获取最新状态，避免使用缓存的book对象
-            fresh_book = session.query(DoubanBook).get(book.id)
+            fresh_book = session.get(DoubanBook, book.id)
             if not fresh_book:
                 self.logger.warning(f"无法找到书籍: ID {book.id}")
                 return False
@@ -116,8 +116,7 @@ class UploadStage(BaseStage):
             # 更新下载记录
             with self.state_manager.get_session() as session:
                 # 在新会话中重新获取下载记录对象
-                record = session.query(DownloadRecord).get(
-                    download_info['id'])
+                record = session.get(DownloadRecord, download_info['id'])
                 if record:
                     record.calibre_id = calibre_id
                     session.commit()

@@ -244,7 +244,7 @@ class BookStateManager:
         try:
             with self.get_session() as session:
                 # 获取书籍当前状态
-                book = session.query(DoubanBook).get(book_id)
+                book = session.get(DoubanBook, book_id)
                 if not book:
                     self.logger.error(f"书籍不存在: ID {book_id}")
                     return False

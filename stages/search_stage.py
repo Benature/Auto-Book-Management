@@ -52,7 +52,7 @@ class SearchStage(BaseStage):
         """
         with self.state_manager.get_session() as session:
             # 重新查询数据库获取最新状态，避免使用缓存的book对象
-            fresh_book = session.query(DoubanBook).get(book.id)
+            fresh_book = session.get(DoubanBook, book.id)
             if not fresh_book:
                 self.logger.warning(f"无法找到书籍: ID {book.id}")
                 return False

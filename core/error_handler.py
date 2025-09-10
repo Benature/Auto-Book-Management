@@ -343,7 +343,7 @@ class ErrorHandler:
     def _execute_error_strategy(self, book_id: int, stage: str, error_info: ErrorInfo) -> Dict[str, Any]:
         """执行错误处理策略"""
         with self.state_manager.get_session() as session:
-            book = session.query(DoubanBook).get(book_id)
+            book = session.get(DoubanBook, book_id)
         if not book:
             return {'action': 'skip', 'reason': 'book not found'}
         
@@ -439,7 +439,7 @@ class ErrorHandler:
     ):
         """记录错误详情"""
         with self.state_manager.get_session() as session:
-            book = session.query(DoubanBook).get(book_id)
+            book = session.get(DoubanBook, book_id)
         book_title = book.title if book else f"ID:{book_id}"
         
         self.logger.error(

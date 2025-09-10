@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 # 导入版本信息
-from __version__ import __version__, get_version_info
+from core.__version__ import __version__, get_version_info
 # 导入项目模块
 from config.config_manager import ConfigManager
 from core.error_handler import ErrorHandler
@@ -781,7 +781,7 @@ class DoubanZLibraryCalibrer:
         
         # 检查当前书籍是否已完成（到达终态）
         with self.state_manager.get_session() as session:
-            current_book = session.query(DoubanBook).get(current_book_id)
+            current_book = session.get(DoubanBook, current_book_id)
             if not current_book:
                 return
             

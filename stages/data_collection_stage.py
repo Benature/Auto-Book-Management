@@ -20,6 +20,9 @@ from scrapers.douban_scraper import DoubanAccessDeniedException, DoubanScraper
 class DataCollectionStage(BaseStage):
     """数据收集处理阶段"""
     
+    # 类级别的403错误标记
+    _douban_403_encountered = False
+    
     def __init__(self, state_manager: BookStateManager, douban_scraper: DoubanScraper):
         """
         初始化数据收集阶段
@@ -41,6 +44,11 @@ class DataCollectionStage(BaseStage):
         Returns:
             bool: 是否可以处理
         """
+        # 如果遇到过豆瓣403错误，停止所有detail fetching任务
+        if self._douban_403_encountered:
+            self.logger.debug(f"豆瓣403错误已发生，跳过详情获取: {book.title}")
+            return False
+            
         return book.status == BookStatus.NEW
     
     def process(self, book: DoubanBook) -> bool:
@@ -98,10 +106,11 @@ class DataCollectionStage(BaseStage):
             return True
             
         except DoubanAccessDeniedException as e:
-            self.logger.warning(f"豆瓣访问被拒绝，保留当前状态: {str(e)}")
-            # 豆瓣403错误时，保留当前状态，不强制跳过详细信息获取
-            # 抛出可重试错误，让系统稍后重试
-            raise NetworkError(f"豆瓣访问被拒绝: {str(e)}")
+            self.logger.warning(f"豆瓣访问被拒绝，停止所有detail fetching任务: {str(e)}")
+            # 设置类级别403错误标记，停止所有后续的detail fetching
+            DataCollectionStage._douban_403_encountered = True
+            # 抛出AuthError表示认证失败，不再重试
+            raise AuthError(f"豆瓣访问被拒绝: {str(e)}")
             
         except Exception as e:
             self.logger.error(f"获取书籍详细信息失败: {str(e)}")
@@ -183,3 +192,20 @@ class DataCollectionStage(BaseStage):
         author = author.strip()
         
         return author
+    
+    @classmethod
+    def has_douban_403_error(cls) -> bool:
+        """
+        检查是否遇到过豆瓣403错误
+        
+        Returns:
+            bool: 是否遇到过403错误
+        """
+        return cls._douban_403_encountered
+    
+    @classmethod
+    def reset_douban_403_error(cls):
+        """
+        重置豆瓣403错误标记
+        """
+        cls._douban_403_encountered = False

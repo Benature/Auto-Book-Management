@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from larkpy import LarkBot
+from larkpy import LarkWebhook
 
 from utils.logger import get_logger
 
@@ -29,7 +29,7 @@ class LarkService:
         self.logger = get_logger("lark_service")
         self.webhook_url = webhook_url
         self.secret = secret
-        self.bot = LarkBot(webhook_url)
+        self.bot = LarkWebhook(webhook_url)
 
     def send_card_message(self, title: str, elements: List[Dict[str,
                                                                 Any]]) -> bool:

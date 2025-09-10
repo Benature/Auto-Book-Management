@@ -428,7 +428,7 @@ class TaskScheduler:
         """
         try:
             with self.state_manager.get_session() as session:
-                task = session.query(ProcessingTask).get(task_id)
+                task = session.get(ProcessingTask, task_id)
                 if task:
                     task.status = status.value
                     task.updated_at = datetime.now()
@@ -552,7 +552,7 @@ class TaskScheduler:
         """
         try:
             with self.state_manager.get_session() as session:
-                book = session.query(DoubanBook).get(book_id)
+                book = session.get(DoubanBook, book_id)
                 if not book:
                     self.logger.warning(f"书籍不存在: ID {book_id}")
                     return False

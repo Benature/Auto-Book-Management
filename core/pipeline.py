@@ -136,7 +136,7 @@ class BaseStage(abc.ABC):
             time.sleep(0.1)
             
             with self.state_manager.get_session() as session:
-                fresh_book = session.query(DoubanBook).get(book.id)
+                fresh_book = session.get(DoubanBook, book.id)
                 if fresh_book:
                     book.status = fresh_book.status
                     book.updated_at = fresh_book.updated_at
@@ -371,6 +371,15 @@ class PipelineManager:
                 self.logger.debug(f"阶段 {stage_name} 已暂停: {pause_reason}")
                 return
             
+            # 特殊检查：如果是data_collection阶段，检查豆瓣403状态
+            if stage_name == 'data_collection':
+                from stages.data_collection_stage import DataCollectionStage
+                if DataCollectionStage.has_douban_403_error():
+                    if stage_name not in self._paused_stages:
+                        self.logger.warning(f"检测到豆瓣403错误，暂停阶段 {stage_name}")
+                        self._paused_stages[stage_name] = "豆瓣403错误，停止详情获取"
+                    return
+            
             # 阶段名到状态阶段的映射
             stage_mapping = {
                 'data_collection': 'data_collection',
@@ -438,7 +447,7 @@ class PipelineManager:
         try:
             # 在独立会话中获取书籍并执行处理
             with self.state_manager.get_session() as session:
-                book = session.query(DoubanBook).get(book_id)
+                book = session.get(DoubanBook, book_id)
                 if not book:
                     self.logger.error(f"找不到书籍: {book_id}")
                     return False
@@ -450,6 +459,12 @@ class PipelineManager:
             # 下载限制耗尽，暂停整个下载阶段
             self.logger.warning(f"下载限制耗尽，暂停下载阶段: {e.reset_time}")
             self._paused_stages[stage.name] = f"下载限制耗尽，重置时间: {e.reset_time}"
+            return False
+            
+        except AuthError as e:
+            # 认证错误（如豆瓣403），暂停对应阶段
+            self.logger.warning(f"认证错误，暂停阶段 {stage.name}: {str(e)}")
+            self._paused_stages[stage.name] = f"认证错误: {str(e)}"
             return False
             
         except Exception as e:
