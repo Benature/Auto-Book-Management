@@ -5,6 +5,7 @@
 负责在Z-Library中搜索书籍并保存结果。
 """
 
+from datetime import datetime
 from typing import Any, Dict, List
 
 from core.pipeline import (BaseStage, NetworkError, ProcessingError,
@@ -222,13 +223,43 @@ class SearchStage(BaseStage):
                         self.logger.warning(f"搜索结果缺少zlibrary_id，跳过: {result.get('title', 'Unknown')}")
                         continue
                     
-                    # 检查是否已存在
-                    existing = session.query(ZLibraryBook).filter(
-                        ZLibraryBook.zlibrary_id == zlibrary_id,
-                        ZLibraryBook.douban_id == book.douban_id).first()
+                    # 多层查重：优先使用 zlibrary_id，然后使用 title+authors+isbn 组合
+                    existing = None
+                    
+                    # 第一层：通过 zlibrary_id 查重（最准确）
+                    if zlibrary_id and zlibrary_id.strip():
+                        existing = session.query(ZLibraryBook).filter(
+                            ZLibraryBook.zlibrary_id == zlibrary_id,
+                            ZLibraryBook.douban_id == book.douban_id).first()
+                    
+                    # 第二层：如果没有 zlibrary_id 或第一层未找到，通过内容组合查重
+                    if not existing:
+                        title = result.get('title', '').strip()
+                        authors = result.get('authors', '').strip()
+                        isbn = result.get('isbn', '').strip()
+                        
+                        if title and authors:  # 至少需要书名和作者
+                            # 构建查询条件
+                            query_conditions = [
+                                ZLibraryBook.douban_id == book.douban_id,
+                                ZLibraryBook.title == title,
+                                ZLibraryBook.authors == authors
+                            ]
+                            
+                            # 如果有ISBN，加入查重条件
+                            if isbn:
+                                query_conditions.append(ZLibraryBook.isbn == isbn)
+                            
+                            existing = session.query(ZLibraryBook).filter(*query_conditions).first()
 
                     if existing:
-                        self.logger.debug(f"Z-Library书籍已存在，跳过: {zlibrary_id} for {book.douban_id}")
+                        # 如果找到重复记录，更新 zlibrary_id（如果原记录没有ID但新数据有）
+                        if zlibrary_id and not existing.zlibrary_id:
+                            existing.zlibrary_id = zlibrary_id
+                            existing.updated_at = datetime.now()
+                            self.logger.info(f"更新Z-Library书籍ID: {existing.title} -> {zlibrary_id}")
+                        else:
+                            self.logger.debug(f"Z-Library书籍已存在，跳过: {title} (ID: {zlibrary_id or '无'})")
                         continue
 
                     # 计算匹配度得分

@@ -18,7 +18,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from utils.logger import get_logger
 
 from .models import (Base, BookStatus, BookStatusHistory, DoubanBook,
-                     DownloadRecord, SyncTask, ZLibraryBook)
+                     DownloadRecord, ZLibraryBook)
 
 
 class Database:
@@ -286,85 +286,6 @@ class Database:
             else:
                 self.logger.warning(f"尝试更新不存在的下载记录: ID {record_id}")
 
-    # SyncTask 相关操作
-    def create_sync_task(self) -> int:
-        """
-        创建同步任务
-        
-        Returns:
-            SyncTask: 创建的同步任务对象
-        """
-        with self.session_scope() as session:
-            task = SyncTask(status="running")
-            session.add(task)
-            session.flush()
-            self.logger.info(f"创建同步任务: ID {task.id}")
-            return task.id
-
-    def update_sync_task(self, task_id: int, task_data: Dict[str,
-                                                             Any]) -> None:
-        """
-        更新同步任务
-        
-        Args:
-            task_id: 同步任务 ID
-            task_data: 同步任务数据字典
-        """
-        with self.session_scope() as session:
-            task = session.query(SyncTask).filter(
-                SyncTask.id == task_id).first()
-            if task:
-                for key, value in task_data.items():
-                    if hasattr(task, key):
-                        setattr(task, key, value)
-                self.logger.info(f"更新同步任务: ID {task.id}, 状态 {task.status}")
-            else:
-                self.logger.warning(f"尝试更新不存在的同步任务: ID {task_id}")
-
-    def get_latest_sync_task(self) -> Optional[SyncTask]:
-        """
-        获取最新的同步任务
-        
-        Returns:
-            Optional[SyncTask]: 同步任务对象，如果不存在则返回 None
-        """
-        with self.session_scope() as session:
-            return session.query(SyncTask).order_by(desc(SyncTask.id)).first()
-
-    def get_sync_task_stats(self) -> Dict[str, int]:
-        """
-        获取同步任务统计信息
-        
-        Returns:
-            Dict[str, int]: 统计信息字典
-        """
-        with self.session_scope() as session:
-            stats = {
-                "total":
-                session.query(DoubanBook).count(),
-                "new":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.NEW).count(),
-                "matched":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.MATCHED).count(),
-                "downloading":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.DOWNLOADING).count(),
-                "downloaded":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.DOWNLOADED).count(),
-                "uploading":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.UPLOADING).count(),
-                "uploaded":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.UPLOADED).count(),
-                "failed":
-                session.query(DoubanBook).filter(
-                    DoubanBook.status == BookStatus.FAILED).count(),
-            }
-            return stats
 
     # ZLibraryBook 相关操作
     def add_zlibrary_book(self, book_data: Dict[str, Any]) -> ZLibraryBook:
@@ -473,7 +394,7 @@ class Database:
     # BookStatusHistory 相关操作
     def add_status_history(self, book_id: int, old_status: Optional[BookStatus], 
                           new_status: BookStatus, change_reason: str = None, 
-                          error_message: str = None, sync_task_id: int = None, 
+                          error_message: str = None, 
                           processing_time: float = None, retry_count: int = 0) -> BookStatusHistory:
         """
         添加状态变更历史记录
@@ -484,7 +405,6 @@ class Database:
             new_status: 新状态
             change_reason: 变更原因
             error_message: 错误信息
-            sync_task_id: 同步任务ID
             processing_time: 处理耗时
             retry_count: 重试次数
             
@@ -498,7 +418,6 @@ class Database:
                 new_status=new_status,
                 change_reason=change_reason,
                 error_message=error_message,
-                sync_task_id=sync_task_id,
                 processing_time=processing_time,
                 retry_count=retry_count
             )
@@ -509,7 +428,7 @@ class Database:
 
     def update_book_status_with_history(self, book_id: int, new_status: BookStatus, 
                                        change_reason: str = None, error_message: str = None, 
-                                       sync_task_id: int = None, processing_time: float = None, 
+                                       processing_time: float = None, 
                                        retry_count: int = 0) -> None:
         """
         更新书籍状态并记录历史
@@ -519,7 +438,6 @@ class Database:
             new_status: 新状态
             change_reason: 变更原因
             error_message: 错误信息
-            sync_task_id: 同步任务ID
             processing_time: 处理耗时
             retry_count: 重试次数
         """
@@ -536,7 +454,6 @@ class Database:
                     new_status=new_status,
                     change_reason=change_reason,
                     error_message=error_message,
-                    sync_task_id=sync_task_id,
                     processing_time=processing_time,
                     retry_count=retry_count
                 )

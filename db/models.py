@@ -111,24 +111,6 @@ class DownloadRecord(Base):
         return f"<DownloadRecord(id={self.id}, book_id={self.book_id}, format='{self.file_format}', status='{self.status}')>"
 
 
-class SyncTask(Base):
-    """同步任务数据模型"""
-    __tablename__ = 'sync_tasks'
-
-    id = Column(Integer, primary_key=True)
-    start_time = Column(DateTime, default=datetime.now)
-    end_time = Column(DateTime)
-    status = Column(String(20))  # running, completed, failed
-    books_total = Column(Integer, default=0)
-    books_new = Column(Integer, default=0)
-    books_matched = Column(Integer, default=0)
-    books_downloaded = Column(Integer, default=0)
-    books_uploaded = Column(Integer, default=0)
-    books_failed = Column(Integer, default=0)
-    error_message = Column(Text)
-
-    def __repr__(self):
-        return f"<SyncTask(id={self.id}, status='{self.status}', start_time='{self.start_time}')>"
 
 
 class ZLibraryBook(Base):
@@ -203,14 +185,13 @@ class BookStatusHistory(Base):
     new_status = Column(Enum(BookStatus), nullable=False, index=True)  # 新状态
     change_reason = Column(String(255))  # 状态变更原因
     error_message = Column(Text)  # 错误信息（如果有）
-    sync_task_id = Column(Integer, ForeignKey('sync_tasks.id'))  # 关联的同步任务
+    # sync_task_id = Column(Integer, ForeignKey('sync_tasks.id'))  # 关联的同步任务（已移除）
     processing_time = Column(Float)  # 处理耗时（秒）
     retry_count = Column(Integer, default=0)  # 重试次数
     created_at = Column(DateTime, default=datetime.now, index=True)
     
     # 关联关系
     book = relationship("DoubanBook", back_populates="status_history")
-    sync_task = relationship("SyncTask")
 
     def __repr__(self):
         old_status_str = self.old_status.value if self.old_status else None
@@ -245,41 +226,3 @@ class ProcessingTask(Base):
         return f"<ProcessingTask(id={self.id}, book_id={self.book_id}, stage='{self.stage}', status='{self.status}')>"
 
 
-class SystemConfig(Base):
-    """系统配置数据模型"""
-    __tablename__ = 'system_config'
-    
-    id = Column(Integer, primary_key=True)
-    key = Column(String(100), unique=True, nullable=False, index=True)
-    value = Column(Text)
-    value_type = Column(String(50), default='string')  # string, int, float, bool, json
-    description = Column(Text)
-    category = Column(String(50), index=True)  # pipeline, service, notification, etc.
-    is_sensitive = Column(Boolean, default=False)  # 是否为敏感信息（如密码）
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
-    def __repr__(self):
-        return f"<SystemConfig(key='{self.key}', category='{self.category}')>"
-
-
-class WorkerStatus(Base):
-    """工作进程状态数据模型"""
-    __tablename__ = 'worker_status'
-    
-    id = Column(Integer, primary_key=True)
-    worker_id = Column(String(100), unique=True, nullable=False, index=True)
-    worker_type = Column(String(50), nullable=False, index=True)  # douban_scraper, zlibrary_service, calibre_service
-    status = Column(String(50), nullable=False, index=True)  # idle, busy, error, offline
-    current_task_id = Column(Integer, ForeignKey('processing_tasks.id'))
-    last_heartbeat = Column(DateTime, index=True)
-    error_message = Column(Text)
-    worker_info = Column(JSON)  # 工作进程的额外信息
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    
-    # 关联关系
-    current_task = relationship("ProcessingTask")
-    
-    def __repr__(self):
-        return f"<WorkerStatus(worker_id='{self.worker_id}', type='{self.worker_type}', status='{self.status}')>"
