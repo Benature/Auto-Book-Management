@@ -309,6 +309,13 @@ class TaskScheduler:
                                        error_message=f"未找到处理器: {task.stage}")
                 return
             
+            # 在执行前再次检查书籍状态是否适合当前阶段
+            if not self._can_schedule_for_stage(task.book_id, task.stage):
+                self.logger.warning(f"任务执行前状态检查失败，取消任务: ID {task.id}, 书籍ID {task.book_id}, 阶段 {task.stage}")
+                self._update_task_status(task.id, TaskStatus.CANCELLED, 
+                                       error_message=f"书籍状态不匹配阶段要求")
+                return
+            
             # 将任务添加到活跃任务列表
             with self._active_lock:
                 self._active_tasks[task.id] = task

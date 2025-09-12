@@ -115,6 +115,105 @@ class BaseStage(abc.ABC):
         """
         pass
 
+    def execute_with_session(self, book: DoubanBook, session: Session) -> bool:
+        """
+        在指定会话中执行处理逻辑，包含状态管理
+        
+        Args:
+            book: 书籍对象
+            session: 数据库会话
+            
+        Returns:
+            bool: 处理是否成功
+        """
+        start_time = datetime.now()
+
+        try:
+            self.logger.info(f"开始处理书籍: {book.title} (ID: {book.id})")
+
+            # 刷新book对象状态确保一致性
+            session.refresh(book)
+            self.logger.debug(f"刷新书籍状态: {book.title}, 状态: {book.status}")
+
+            # 检查是否可以处理
+            if not self.can_process(book):
+                error_msg = f"无法处理书籍: {book.title}, 状态: {book.status.value}"
+                self.logger.debug(error_msg)
+                # 对于状态不匹配错误，不应该重试，但也不是永久失败
+                # 这通常发生在书籍还在其他阶段处理时，应该让任务调度器重新安排
+                raise ProcessingError(error_msg, "status_mismatch", retryable=True)
+
+            # 处理状态转换逻辑（仅在特定情况下需要预转换）
+            if self.name == "search" and book.status == BookStatus.DETAIL_COMPLETE:
+                # 搜索阶段：DETAIL_COMPLETE -> SEARCH_QUEUED -> SEARCH_ACTIVE
+                self.state_manager.transition_status_in_session(book.id, BookStatus.SEARCH_QUEUED,
+                                                               "准备开始搜索", session)
+                book.status = BookStatus.SEARCH_QUEUED  # 同步本地状态
+            
+            # 设置为active状态
+            active_status = self._get_active_status()
+            if active_status:
+                self.state_manager.transition_status_in_session(book.id, active_status,
+                                                               f"开始{self.name}阶段处理", session)
+                book.status = active_status  # 同步本地状态
+
+            # 执行实际处理
+            success = self.process(book)
+
+            # 处理结果状态转换
+            processing_time = (datetime.now() - start_time).total_seconds()
+            next_status = self.get_next_status(success)
+            
+            # 处理结果状态转换
+            change_reason = f"{self.name}阶段{'成功' if success else '失败'}"
+            self.state_manager.transition_status_in_session(
+                book.id, next_status, change_reason, session, processing_time, 0
+            )
+            
+            # 更新本地状态
+            book.status = next_status
+            
+            # 在会话提交后，手动调度下一阶段（如果成功的话）
+            if success:
+                # 让状态管理器在会话外检查并调度下一阶段
+                # 这里我们直接调用，因为状态已经在session中更新了，session.commit时会生效
+                session.commit()  # 立即提交状态变更
+                self.state_manager._schedule_next_stage_if_needed(book.id, next_status)
+
+            self.logger.info(f"处理完成: {book.title}, 成功: {success}, 耗时: {processing_time:.2f}秒, 下一状态: {next_status.value}")
+            return success
+
+        except ProcessingError as e:
+            processing_time = (datetime.now() - start_time).total_seconds()
+            self.logger.warning(f"处理异常: {book.title}, 错误: {str(e)}")
+            
+            if e.retryable:
+                # 可重试错误：保持当前状态，让任务调度器重试
+                pass
+            else:
+                # 永久失败：转换为失败状态
+                self.state_manager.transition_status_in_session(
+                    book.id, BookStatus.FAILED_PERMANENT, 
+                    f"{self.name}阶段永久失败: {str(e)}", session, processing_time, 0, str(e)
+                )
+                book.status = BookStatus.FAILED_PERMANENT
+            
+            raise  # 重新抛出异常让调度器处理
+            
+        except Exception as e:
+            processing_time = (datetime.now() - start_time).total_seconds()
+            error_message = f"处理异常: {str(e)}"
+            self.logger.error(f"处理失败: {book.title}, 错误: {error_message}")
+            
+            # 未知错误：转换为失败状态，但允许重试
+            self.state_manager.transition_status_in_session(
+                book.id, BookStatus.FAILED_PERMANENT,
+                f"{self.name}阶段异常", session, processing_time, 0, error_message
+            )
+            book.status = BookStatus.FAILED_PERMANENT
+            
+            return False
+
     def execute(self, book: DoubanBook) -> bool:
         """
         执行处理逻辑，包含状态管理

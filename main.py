@@ -15,10 +15,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-# 导入版本信息
-from core.__version__ import __version__, get_version_info
 # 导入项目模块
 from config.config_manager import ConfigManager
+# 导入版本信息
+from core.__version__ import __version__, get_version_info
 from core.error_handler import ErrorHandler
 from core.pipeline import PipelineManager
 # 导入新架构组件
@@ -80,6 +80,12 @@ class DoubanZLibraryCalibrer:
         # 状态跟踪
         self._running = False
         self._shutdown_event = threading.Event()
+        
+        # 恢复程序崩溃后的状态
+        self._recover_from_crash()
+        
+        # 启动状态监控定时器
+        self._start_state_monitor()
         
         self.logger.info("豆瓣 Z-Library 同步工具初始化完成")
     
@@ -235,13 +241,8 @@ class DoubanZLibraryCalibrer:
                         self.logger.error(f"找不到书籍: {task.book_id}")
                         return False
                     
-                    # 执行阶段处理（这将在会话中进行）
-                    success = stage.execute(book)
-                    
-                    # 确保book对象的修改被提交
-                    if success and session.is_modified(book):
-                        # 会话会在上下文管理器结束时自动提交
-                        pass
+                    # 执行阶段处理，传入session确保在同一事务中
+                    success = stage.execute_with_session(book, session)
                     
                     return success
             return handler
@@ -266,6 +267,48 @@ class DoubanZLibraryCalibrer:
             
             self.error_handler.register_error_callback('auth_forbidden', auth_error_callback)
             self.error_handler.register_error_callback('auth_login', auth_error_callback)
+    
+    def _recover_from_crash(self):
+        """恢复程序崩溃后的状态"""
+        try:
+            self.logger.info("检查程序崩溃后需要恢复的状态...")
+            recovered_count = self.state_manager.recover_from_crash()
+            if recovered_count > 0:
+                self.logger.info(f"成功恢复 {recovered_count} 个崩溃任务状态")
+            
+            # 清理状态不匹配的任务
+            self.logger.info("检查并清理状态不匹配的任务...")
+            cleaned_count = self.state_manager.cleanup_mismatched_tasks()
+            if cleaned_count > 0:
+                self.logger.info(f"清理了 {cleaned_count} 个状态不匹配的任务")
+                
+        except Exception as e:
+            self.logger.error(f"程序崩溃状态恢复失败: {str(e)}")
+    
+    def _start_state_monitor(self):
+        """启动状态监控定时器"""
+        def state_monitor():
+            while not self._shutdown_event.wait(60):  # 每60秒检查一次
+                try:
+                    self.logger.debug("执行定时状态检查和清理...")
+                    
+                    # 清理不匹配的任务
+                    cleaned_count = self.state_manager.cleanup_mismatched_tasks()
+                    if cleaned_count > 0:
+                        self.logger.info(f"定时清理了 {cleaned_count} 个不匹配的任务")
+                    
+                    # 恢复可能的崩溃状态
+                    recovered_count = self.state_manager.recover_from_crash()
+                    if recovered_count > 0:
+                        self.logger.info(f"定时恢复了 {recovered_count} 个崩溃状态")
+                        
+                except Exception as e:
+                    self.logger.error(f"状态监控定时器出错: {str(e)}")
+        
+        # 启动监控线程
+        monitor_thread = threading.Thread(target=state_monitor, daemon=True)
+        monitor_thread.start()
+        self.logger.info("状态监控定时器已启动，每60秒检查一次")
     
     def sync_douban_books(self, notify: bool = False) -> Dict[str, Any]:
         """

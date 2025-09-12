@@ -100,8 +100,6 @@ class DataCollectionStage(BaseStage):
             book.search_title = self._prepare_search_title(book)
             book.search_author = self._prepare_search_author(book)
             
-            # 使用状态管理器的会话处理提交
-            
             self.logger.info(f"成功获取书籍详细信息: {book.title}")
             return True
             

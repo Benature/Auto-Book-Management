@@ -313,6 +313,126 @@ class BookStateManager:
             self.logger.error(f"状态转换失败: {str(e)}")
             return False
 
+    def transition_status_in_session(self,
+                                   book_id: int,
+                                   to_status: BookStatus,
+                                   change_reason: str,
+                                   session: Session,
+                                   processing_time: Optional[float] = None,
+                                   retry_count: int = 0,
+                                   error_message: Optional[str] = None) -> bool:
+        """
+        在指定会话中执行状态转换
+        
+        Args:
+            book_id: 书籍ID
+            to_status: 目标状态
+            change_reason: 状态变更原因
+            session: 数据库会话
+            processing_time: 处理耗时（可选）
+            retry_count: 重试次数
+            error_message: 错误信息（可选）
+            
+        Returns:
+            bool: 转换是否成功
+        """
+        try:
+            # 获取书籍当前状态
+            book = session.get(DoubanBook, book_id)
+            if not book:
+                self.logger.error(f"书籍不存在: ID {book_id}")
+                return False
+
+            current_status = book.status
+
+            self.logger.info(
+                f"状态转换: {book_id} {current_status.value} -> {to_status.value} {change_reason}"
+            )
+
+            # 验证状态转换
+            if not self.is_valid_transition(current_status, to_status):
+                self.logger.error(
+                    f"无效的状态转换: {current_status.value} -> {to_status.value} "
+                    f"(书籍ID: {book_id})")
+                return False
+
+            # 更新书籍状态
+            old_status = book.status
+            book.status = to_status
+            book.updated_at = datetime.now()
+
+            if error_message:
+                book.error_message = error_message
+
+            # 确保对象被标记为dirty，强制session跟踪此对象
+            session.add(book)
+
+            # 创建状态历史记录
+            history = BookStatusHistory(book_id=book_id,
+                                        old_status=old_status,
+                                        new_status=to_status,
+                                        change_reason=change_reason,
+                                        error_message=error_message,
+                                        processing_time=processing_time,
+                                        retry_count=retry_count)
+
+            session.add(history)
+
+            self.logger.info(
+                f"状态转换成功: 书籍ID {book_id}, {old_status.value} -> {to_status.value}, "
+                f"事务将随外部会话提交, 时间: {datetime.now().isoformat()}")
+
+            # 发送飞书通知
+            self._send_status_change_notification(book, old_status,
+                                                  to_status, change_reason,
+                                                  processing_time)
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"会话内状态转换失败: {str(e)}")
+            return False
+
+    def transition_status_with_next_task_in_session(self,
+                                                   book_id: int,
+                                                   to_status: BookStatus,
+                                                   change_reason: str,
+                                                   next_stage: str,
+                                                   processing_time: Optional[float] = None,
+                                                   retry_count: int = 0,
+                                                   session: Session = None) -> bool:
+        """
+        在指定会话中执行状态转换并调度下一阶段任务
+        
+        Args:
+            book_id: 书籍ID
+            to_status: 目标状态
+            change_reason: 状态变更原因
+            next_stage: 下一阶段名称
+            processing_time: 处理耗时（可选）
+            retry_count: 重试次数
+            session: 数据库会话
+            
+        Returns:
+            bool: 转换是否成功
+        """
+        # 先执行状态转换
+        if not self.transition_status_in_session(book_id, to_status, change_reason, 
+                                                session, processing_time, retry_count):
+            return False
+        
+        # 调度下一阶段任务
+        from core.task_scheduler import TaskScheduler
+        if hasattr(self, 'task_scheduler'):
+            # 直接调度任务
+            task_id = self.task_scheduler.schedule_task(book_id, next_stage)
+            self.logger.info(f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}, "
+                           f"状态已转换至: {to_status.value}, 调度时间: {datetime.now().isoformat()}")
+        else:
+            self.logger.warning(f"无法调度下一阶段任务: 缺少task_scheduler引用 (书籍ID {book_id}, 阶段 {next_stage})")
+        
+        return True
+
     def get_books_by_status(self,
                             status: BookStatus,
                             limit: Optional[int] = None) -> List[DoubanBook]:
@@ -479,6 +599,146 @@ class BookStateManager:
 
         except Exception as e:
             self.logger.error(f"重置卡住的状态失败: {str(e)}")
+            return 0
+
+    def recover_from_crash(self) -> int:
+        """
+        恢复程序崩溃后的状态，将所有ACTIVE状态重置为QUEUED状态
+        
+        主要用于程序启动时检查是否有未完成的任务需要恢复
+        
+        Returns:
+            int: 恢复的记录数量
+        """
+        try:
+            # 需要恢复的状态映射
+            recovery_mapping = {
+                BookStatus.DETAIL_FETCHING: BookStatus.NEW,
+                BookStatus.SEARCH_ACTIVE: BookStatus.SEARCH_QUEUED,
+                BookStatus.DOWNLOAD_ACTIVE: BookStatus.DOWNLOAD_QUEUED,
+                BookStatus.UPLOAD_ACTIVE: BookStatus.UPLOAD_QUEUED
+            }
+
+            active_statuses = list(recovery_mapping.keys())
+            
+            with self.get_session() as session:
+                # 查找所有处于ACTIVE状态的书籍
+                active_books = session.query(DoubanBook).filter(
+                    DoubanBook.status.in_(active_statuses)
+                ).all()
+
+                # 收集需要恢复的书籍ID
+                book_ids_to_recover = []
+                for book in active_books:
+                    new_status = recovery_mapping.get(book.status)
+                    if new_status:
+                        book_ids_to_recover.append((book.id, book.status, new_status))
+
+            # 执行状态恢复
+            recovered_count = 0
+            for book_id, old_status, new_status in book_ids_to_recover:
+                if self.transition_status(
+                    book_id, 
+                    new_status,
+                    f"程序崩溃恢复：{old_status} -> {new_status}"
+                ):
+                    recovered_count += 1
+
+            if recovered_count > 0:
+                self.logger.info(f"程序启动时恢复了 {recovered_count} 个崩溃状态")
+            else:
+                self.logger.debug("程序启动时没有发现需要恢复的崩溃状态")
+            
+            return recovered_count
+
+        except Exception as e:
+            self.logger.error(f"程序崩溃恢复失败: {str(e)}")
+            return 0
+
+    def cleanup_mismatched_tasks(self) -> int:
+        """
+        清理任务和书籍状态不匹配的任务
+        
+        Returns:
+            int: 清理的任务数量
+        """
+        try:
+            # 定义每个阶段需要的书籍状态
+            stage_status_requirements = {
+                'data_collection': [BookStatus.NEW],
+                'search': [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED, BookStatus.SEARCH_ACTIVE],
+                'download': [BookStatus.SEARCH_COMPLETE, BookStatus.DOWNLOAD_QUEUED, BookStatus.DOWNLOAD_ACTIVE],
+                'upload': [BookStatus.DOWNLOAD_COMPLETE, BookStatus.UPLOAD_QUEUED, BookStatus.UPLOAD_ACTIVE]
+            }
+            
+            from core.task_scheduler import TaskStatus
+            from db.models import ProcessingTask
+            
+            with self.get_session() as session:
+                # 查找所有未完成的任务
+                pending_tasks = session.query(ProcessingTask).filter(
+                    ProcessingTask.status.in_([
+                        TaskStatus.QUEUED.value,
+                        TaskStatus.ACTIVE.value
+                    ])
+                ).all()
+                
+                # 收集需要清理的任务ID
+                tasks_to_cleanup = []
+                
+                for task in pending_tasks:
+                    # 获取对应的书籍
+                    book = session.get(DoubanBook, task.book_id)
+                    
+                    should_cleanup = False
+                    
+                    if not book:
+                        # 书籍不存在，清理任务
+                        should_cleanup = True
+                        self.logger.info(f"发现无效任务（书籍不存在）: 任务 {task.id}, 书籍ID {task.book_id}")
+                    else:
+                        # 检查状态匹配
+                        required_statuses = stage_status_requirements.get(task.stage, [])
+                        if book.status not in required_statuses:
+                            should_cleanup = True
+                            self.logger.info(
+                                f"发现状态不匹配任务: 任务 {task.id}, 书籍 {book.title} (ID: {task.book_id}), "
+                                f"任务阶段: {task.stage}, 书籍状态: {book.status}, "
+                                f"需要状态: {[s.value for s in required_statuses]}"
+                            )
+                        
+                        # 特殊处理：终态书籍不应该有未完成的任务
+                        final_statuses = [
+                            BookStatus.COMPLETED, 
+                            BookStatus.SKIPPED_EXISTS, 
+                            BookStatus.FAILED_PERMANENT,
+                            BookStatus.UPLOAD_COMPLETE,
+                            BookStatus.SEARCH_NO_RESULTS
+                        ]
+                        if book.status in final_statuses:
+                            should_cleanup = True
+                            self.logger.info(f"发现终态书籍的过时任务: 任务 {task.id}, 书籍 {book.title}, 状态: {book.status}")
+                    
+                    if should_cleanup:
+                        tasks_to_cleanup.append(task.id)
+                
+                # 执行清理
+                if tasks_to_cleanup:
+                    cleaned_count = session.query(ProcessingTask).filter(
+                        ProcessingTask.id.in_(tasks_to_cleanup)
+                    ).update({
+                        ProcessingTask.status: TaskStatus.CANCELLED.value,
+                        ProcessingTask.completed_at: datetime.now()
+                    }, synchronize_session=False)
+                    
+                    self.logger.info(f"清理了 {cleaned_count} 个状态不匹配的任务")
+                    return cleaned_count
+                else:
+                    self.logger.debug("没有发现需要清理的状态不匹配任务")
+                    return 0
+                    
+        except Exception as e:
+            self.logger.error(f"清理状态不匹配任务失败: {str(e)}")
             return 0
 
     def can_retry(self, book_id: int, max_retries: int = 3) -> bool:
