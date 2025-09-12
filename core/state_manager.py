@@ -296,10 +296,16 @@ class BookStateManager:
 
             # 事务提交完成后，再调度下一个阶段的任务
             # 这确保状态更新已经完全提交到数据库
-            self.logger.debug(
-                f"事务已提交，开始检查是否需要调度下一阶段: 书籍ID {book_id}, 当前状态: {to_status.value}"
-            )
-            self._schedule_next_stage_if_needed(book_id, to_status)
+            # 但要避免在QUEUED状态转换中再次调度，防止递归调用
+            if not to_status.value.endswith('_queued'):
+                self.logger.debug(
+                    f"事务已提交，开始检查是否需要调度下一阶段: 书籍ID {book_id}, 当前状态: {to_status.value}"
+                )
+                self._schedule_next_stage_if_needed(book_id, to_status)
+            else:
+                self.logger.debug(
+                    f"跳过调度检查，因为当前状态是queued状态: 书籍ID {book_id}, 状态: {to_status.value}"
+                )
 
             return True
 
@@ -622,10 +628,32 @@ class BookStateManager:
                     next_queued_status = BookStatus.UPLOAD_QUEUED
 
                 if next_queued_status:
-                    # 先转换状态，然后调度任务
-                    self.transition_status(book_id=book_id,
-                                           to_status=next_queued_status,
-                                           change_reason=f"准备进入{next_stage}阶段")
+                    # 直接在数据库中更新状态，避免递归调用transition_status
+                    try:
+                        with self.get_session() as session:
+                            book = session.get(DoubanBook, book_id)
+                            if book and book.status == current_status:
+                                old_status = book.status
+                                book.status = next_queued_status
+                                book.updated_at = datetime.now()
+                                
+                                # 创建状态历史记录
+                                history = BookStatusHistory(
+                                    book_id=book_id,
+                                    old_status=old_status,
+                                    new_status=next_queued_status,
+                                    change_reason=f"准备进入{next_stage}阶段"
+                                )
+                                session.add(history)
+                                
+                                self.logger.info(
+                                    f"状态转换: {book_id} {old_status.value} -> {next_queued_status.value} 准备进入{next_stage}阶段"
+                                )
+                            else:
+                                self.logger.warning(f"书籍状态已变更，跳过queued状态转换: 书籍ID {book_id}")
+                    except Exception as status_error:
+                        self.logger.error(f"queued状态转换失败: {str(status_error)}")
+                        return
 
                 # 导入TaskPriority避免循环导入
                 from core.task_scheduler import TaskPriority
@@ -634,7 +662,7 @@ class BookStateManager:
                         book_id=book_id,
                         stage=next_stage,
                         priority=TaskPriority.NORMAL,
-                        delay_seconds=1  # 减少延迟，状态已经正确转换
+                        delay_seconds=3  # 给状态更新充足时间完全提交到数据库
                     )
                     self.logger.info(
                         f"自动调度下一阶段任务: 书籍ID {book_id}, 阶段 {next_stage}, 任务ID {task_id}, "

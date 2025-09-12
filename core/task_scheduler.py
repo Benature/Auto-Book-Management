@@ -333,7 +333,11 @@ class TaskScheduler:
                         self._handle_task_failure(task)
                         
                 except Exception as e:
-                    self.logger.error(f"任务执行异常: ID {task.id}, 异常: {str(e)}")
+                    import traceback
+                    error_details = f"异常类型: {type(e).__name__}, 错误: {str(e)}"
+                    self.logger.error(f"任务执行异常 - ID: {task.id}, 书籍ID: {task.book_id}, 阶段: {task.stage}")
+                    self.logger.error(f"异常详情: {error_details}")
+                    self.logger.error(f"异常堆栈:\n{traceback.format_exc()}")
                     self._handle_task_failure(task, str(e), e)
                 finally:
                     # 从活跃任务列表移除
@@ -401,16 +405,21 @@ class TaskScheduler:
             )
             
             self.logger.warning(
-                f"任务失败，将在 {delay_seconds} 秒后重试: ID {task.id}, "
-                f"重试次数 {task.retry_count}/{task.max_retries}"
+                f"任务失败，将在 {delay_seconds} 秒后重试: ID {task.id}, 书籍ID {task.book_id}, "
+                f"阶段 {task.stage}, 重试次数 {task.retry_count}/{task.max_retries}"
             )
+            if error_message:
+                self.logger.warning(f"任务 {task.id} 失败原因: {error_message}")
         else:
             # 超过最大重试次数
             self._update_task_status(task.id, TaskStatus.FAILED, error_message=error_message)
             self._stats['total_failed'] += 1
             self.logger.error(
-                f"任务最终失败: ID {task.id}, 已达到最大重试次数 {task.max_retries}"
+                f"任务最终失败: ID {task.id}, 书籍ID {task.book_id}, 阶段 {task.stage}, "
+                f"已达到最大重试次数 {task.max_retries}"
             )
+            if error_message:
+                self.logger.error(f"最终失败原因: {error_message}")
     
     def _update_task_status(
         self, 

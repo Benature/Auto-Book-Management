@@ -205,8 +205,10 @@ class BaseStage(abc.ABC):
 
             # 对于状态不匹配错误，不进行状态转换，保持当前状态
             if e.error_type == "status_mismatch":
-                self.logger.debug(f"状态不匹配，保持当前状态: {book.title}, 状态: {book.status.value}")
-                return False
+                error_msg = f"状态不匹配 - 书籍: {book.title} (ID: {book.id}), 当前状态: {book.status.value}, 阶段: {self.name}"
+                self.logger.warning(error_msg)
+                # 重新抛出，让TaskScheduler知道具体原因
+                raise Exception(f"{self.name}阶段状态不匹配: {str(e)}") from e
 
             # 根据错误类型决定下一状态
             if e.retryable:
@@ -221,21 +223,32 @@ class BaseStage(abc.ABC):
                 error_message=str(e),
                 processing_time=processing_time)
 
-            self.logger.error(f"处理出错: {book.title}, 错误: {str(e)}")
-            return False
+            error_details = f"处理错误 - 书籍: {book.title} (ID: {book.id}), 错误类型: {e.error_type}, 可重试: {e.retryable}"
+            self.logger.error(error_details)
+            self.logger.error(f"错误详情: {str(e)}")
+            
+            # 重新抛出异常，让TaskScheduler能获取到具体错误信息
+            raise Exception(f"{self.name}阶段处理错误: {e.error_type} - {str(e)}") from e
 
         except Exception as e:
             processing_time = (datetime.now() - start_time).total_seconds()
+            
+            # 详细的异常信息记录
+            import traceback
+            error_details = f"异常类型: {type(e).__name__}, 错误信息: {str(e)}"
+            self.logger.error(f"处理异常 - 书籍: {book.title} (ID: {book.id}), 阶段: {self.name}")
+            self.logger.error(f"异常详情: {error_details}")
+            self.logger.error(f"异常堆栈: {traceback.format_exc()}")
 
             self.state_manager.transition_status(
                 book.id,
                 BookStatus.FAILED_PERMANENT,
-                f"{self.name}阶段异常",
-                error_message=str(e),
+                f"{self.name}阶段异常: {type(e).__name__}",
+                error_message=error_details,
                 processing_time=processing_time)
 
-            self.logger.error(f"处理异常: {book.title}, 异常: {str(e)}")
-            return False
+            # 重新抛出异常，让TaskScheduler能获取到具体错误信息
+            raise Exception(f"{self.name}阶段处理失败: {error_details}") from e
 
     def _get_active_status(self) -> Optional[BookStatus]:
         """获取对应的active状态"""
