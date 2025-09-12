@@ -975,23 +975,6 @@ class ZLibraryService:
 
     # 已删除 search_and_download 方法，完全分离 search 和 download 步骤
 
-    def _select_best_format(self, results: List[Dict[str,
-                                                     Any]]) -> Dict[str, Any]:
-        """选择最佳格式的书籍"""
-        if not results:
-            raise ProcessingError("搜索结果为空")
-
-        # 按格式优先级选择
-        format_priority = self.download_service.format_priority
-
-        for preferred_format in format_priority:
-            for result in results:
-                if result.get('extension',
-                              '').lower() == preferred_format.lower():
-                    return result
-
-        # 没有找到优先格式，返回第一个
-        return results[0]
 
     def calculate_match_score(self, douban_book: Dict[str, str],
                               zlibrary_book: Dict[str, str]) -> float:

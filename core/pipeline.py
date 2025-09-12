@@ -153,9 +153,10 @@ class BaseStage(abc.ABC):
             # 检查是否可以处理
             if not self.can_process(book):
                 error_msg = f"无法处理书籍: {book.title}, 状态: {book.status.value}"
-                self.logger.warning(error_msg)
-                # 对于状态不匹配错误，不应该重试，而是直接跳过
-                raise ProcessingError(error_msg, "status_mismatch", retryable=False)
+                self.logger.debug(error_msg)
+                # 对于状态不匹配错误，不应该重试，但也不是永久失败
+                # 这通常发生在书籍还在其他阶段处理时，应该让任务调度器重新安排
+                raise ProcessingError(error_msg, "status_mismatch", retryable=True)
 
             # 处理状态转换逻辑（仅在特定情况下需要预转换）
             if self.name == "search" and book.status == BookStatus.DETAIL_COMPLETE:
@@ -169,6 +170,7 @@ class BaseStage(abc.ABC):
             if active_status:
                 self.state_manager.transition_status(book.id, active_status,
                                                      f"开始{self.name}阶段处理")
+                book.status = active_status  # 同步本地状态
 
             # 执行实际处理
             success = self.process(book)
@@ -200,6 +202,11 @@ class BaseStage(abc.ABC):
             
         except ProcessingError as e:
             processing_time = (datetime.now() - start_time).total_seconds()
+
+            # 对于状态不匹配错误，不进行状态转换，保持当前状态
+            if e.error_type == "status_mismatch":
+                self.logger.debug(f"状态不匹配，保持当前状态: {book.title}, 状态: {book.status.value}")
+                return False
 
             # 根据错误类型决定下一状态
             if e.retryable:

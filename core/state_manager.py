@@ -22,7 +22,7 @@ class BookStateManager:
     VALID_TRANSITIONS: Dict[BookStatus, Set[BookStatus]] = {
         # 数据收集阶段
         BookStatus.NEW: {
-            BookStatus.DETAIL_FETCHING, BookStatus.SKIPPED_EXISTS,
+            BookStatus.DETAIL_FETCHING, BookStatus.DETAIL_COMPLETE, BookStatus.SKIPPED_EXISTS,
             BookStatus.FAILED_PERMANENT
         },
         BookStatus.DETAIL_FETCHING: {
@@ -279,7 +279,6 @@ class BookStateManager:
                                             new_status=to_status,
                                             change_reason=change_reason,
                                             error_message=error_message,
-                                            sync_task_id=sync_task_id,
                                             processing_time=processing_time,
                                             retry_count=retry_count)
 
@@ -649,3 +648,59 @@ class BookStateManager:
                     self.logger.error(f"自动调度下一阶段任务失败: {str(task_error)}")
             except Exception as e:
                 self.logger.error(f"自动调度下一阶段任务失败: {str(e)}")
+
+    def reset_stale_detail_fetching_books(self, timeout_hours: int = 3) -> int:
+        """
+        重置停留在DETAIL_FETCHING状态过久的书籍
+        
+        Args:
+            timeout_hours: 超时小时数，默认3小时
+            
+        Returns:
+            int: 重置的书籍数量
+        """
+        reset_count = 0
+        try:
+            cutoff_time = datetime.now() - timedelta(hours=timeout_hours)
+            with self.get_session() as session:
+                # 查找停留在DETAIL_FETCHING状态超过指定时间的书籍
+                stale_books = session.query(DoubanBook).filter(
+                    DoubanBook.status == BookStatus.DETAIL_FETCHING,
+                    DoubanBook.updated_at < cutoff_time
+                ).all()
+                
+                for book in stale_books:
+                    try:
+                        # 将状态重置为NEW，让系统重新处理
+                        old_status = book.status
+                        book.status = BookStatus.NEW
+                        book.updated_at = datetime.now()
+                        
+                        # 记录状态变更历史
+                        history = BookStatusHistory(
+                            book_id=book.id,
+                            old_status=old_status,
+                            new_status=BookStatus.NEW,
+                            change_reason=f"超时重置: detail_fetching状态超过{timeout_hours}小时自动重置",
+                            processing_time=0,
+                            created_at=datetime.now()
+                        )
+                        session.add(history)
+                        
+                        reset_count += 1
+                        self.logger.info(
+                            f"重置超时书籍状态: {book.title} (ID: {book.id}), "
+                            f"{old_status.value} -> {BookStatus.NEW.value}, "
+                            f"停留时间: {datetime.now() - book.updated_at}"
+                        )
+                    except Exception as e:
+                        self.logger.error(f"重置书籍状态失败: {book.title} (ID: {book.id}), 错误: {str(e)}")
+                        continue
+                
+                if reset_count > 0:
+                    self.logger.info(f"成功重置 {reset_count} 本超时书籍的状态")
+                    
+        except Exception as e:
+            self.logger.error(f"重置超时书籍状态失败: {str(e)}")
+        
+        return reset_count

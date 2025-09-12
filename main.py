@@ -428,6 +428,12 @@ class DoubanZLibraryCalibrer:
         """执行一次同步"""
         self.logger.info("执行一次同步任务")
         
+        # 检查并重置超时的detail_fetching状态
+        self.logger.info("检查并重置超时的detail_fetching状态")
+        reset_count = self.state_manager.reset_stale_detail_fetching_books(timeout_hours=3)
+        if reset_count > 0:
+            self.logger.info(f"重置了 {reset_count} 本超时书籍的状态")
+        
         # 同步豆瓣书单
         sync_result = self.sync_douban_books(notify=True)
         
@@ -493,6 +499,7 @@ class DoubanZLibraryCalibrer:
             interval_hours = schedule_config.get('hours', 24)
         
         last_sync_time = datetime.now()
+        last_cleanup_time = datetime.now()
         
         while not self._shutdown_event.is_set():
             try:
@@ -505,6 +512,14 @@ class DoubanZLibraryCalibrer:
                     
                     if sync_result['success']:
                         last_sync_time = current_time
+                
+                # 每小时检查一次超时的detail_fetching状态并重置
+                if (current_time - last_cleanup_time).total_seconds() >= 3600:  # 3600秒 = 1小时
+                    self.logger.info("开始检查并重置超时的detail_fetching状态")
+                    reset_count = self.state_manager.reset_stale_detail_fetching_books(timeout_hours=3)
+                    if reset_count > 0:
+                        self.logger.info(f"重置了 {reset_count} 本超时书籍的状态")
+                    last_cleanup_time = current_time
                     
                 # 休眠1分钟后再检查
                 if self._shutdown_event.wait(60):

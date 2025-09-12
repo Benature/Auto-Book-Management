@@ -62,9 +62,15 @@ class SearchStage(BaseStage):
             
             # 接受DETAIL_COMPLETE、SEARCH_QUEUED和SEARCH_ACTIVE状态的书籍
             can_process = current_status in [BookStatus.DETAIL_COMPLETE, BookStatus.SEARCH_QUEUED, BookStatus.SEARCH_ACTIVE]
+            
+            # 对于DETAIL_FETCHING状态，这是正常的数据收集阶段，直接跳过，不记录错误
+            if current_status == BookStatus.DETAIL_FETCHING:
+                self.logger.debug(f"书籍仍在数据收集阶段，跳过搜索处理: {book.title}, 状态: {current_status.value}")
+                return False
+            
             self.logger.info(f"处理书籍: {book.title}, 数据库状态: {current_status.value}, 传入状态: {book.status.value}, 可处理: {can_process}")
             
-            # 如果状态不符合处理条件，记录警告
+            # 对于其他不符合条件的状态，记录警告（但不是错误）
             if not can_process:
                 self.logger.warning(f"无法处理书籍: {book.title}, 状态: {current_status.value}")
             
@@ -86,7 +92,14 @@ class SearchStage(BaseStage):
         
         # 先检查是否可以处理这本书籍
         if not self.can_process(book):
-            raise ProcessingError(f"无法处理书籍: {book.title}, 状态不匹配")
+            # 对于DETAIL_FETCHING状态，直接返回False，不抛出异常
+            with self.state_manager.get_session() as session:
+                fresh_book = session.get(DoubanBook, book.id)
+                if fresh_book and fresh_book.status == BookStatus.DETAIL_FETCHING:
+                    self.logger.debug(f"书籍仍在数据收集阶段，跳过处理: {book.title}")
+                    return False
+            # 对于其他状态不匹配的情况，抛出可重试的异常
+            raise ProcessingError(f"无法处理书籍: {book.title}, 状态不匹配", "status_mismatch", retryable=True)
         
         try:
             # 首先检查Calibre中是否已存在
@@ -165,10 +178,10 @@ class SearchStage(BaseStage):
                 raise
         except Exception as e:
             self.logger.error(f"搜索书籍失败: {str(e)}")
-            # 特殊处理：如果是状态不匹配错误（can_process返回False导致的），直接跳过
+            # 特殊处理：如果是状态不匹配错误，允许重试
             if "状态不匹配" in str(e):
-                self.logger.warning(f"书籍状态不符合搜索阶段处理条件，跳过: {book.title}")
-                raise ProcessingError(f"状态不匹配: {str(e)}", retryable=False)
+                self.logger.debug(f"书籍状态不符合搜索阶段处理条件，稍后重试: {book.title}")
+                raise ProcessingError(f"状态不匹配: {str(e)}", "status_mismatch", retryable=True)
             # 判断错误类型
             elif "timeout" in str(e).lower() or "connection" in str(e).lower():
                 raise NetworkError(f"网络错误: {str(e)}")

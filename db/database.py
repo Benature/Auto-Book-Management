@@ -47,30 +47,6 @@ class Database:
         # 为新架构提供session_factory
         self.session_factory = sessionmaker(bind=self.engine)
 
-    def _initialize_database(self):
-        """
-        初始化数据库，如果数据库文件不存在则创建并初始化表结构。
-        """
-        db_path = Path(self.db_url.replace("sqlite:///", "")).resolve()
-        self.logger.info(f"数据库路径解析为: {db_path.as_posix()}")
-        if not db_path.exists():
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute('''CREATE TABLE IF NOT EXISTS sync_tasks (
-                                id INTEGER PRIMARY KEY,
-                                start_time TEXT NOT NULL,
-                                end_time TEXT,
-                                status TEXT NOT NULL,
-                                books_total INTEGER,
-                                books_new INTEGER,
-                                books_matched INTEGER,
-                                books_downloaded INTEGER,
-                                books_uploaded INTEGER,
-                                books_failed INTEGER,
-                                error_message TEXT
-                            )''')
-            conn.commit()
-            conn.close()
 
     def init_db(self) -> None:
         """
@@ -144,20 +120,6 @@ class Database:
         with self.session_scope() as session:
             return session.query(DoubanBook).filter(
                 DoubanBook.isbn == isbn).first()
-
-    def get_book_by_douban_id(self, douban_id: str) -> Optional[DoubanBook]:
-        """
-        根据豆瓣 ID 获取书籍
-        
-        Args:
-            douban_id: 豆瓣书籍 ID
-            
-        Returns:
-            Optional[DoubanBook]: 书籍对象，如果不存在则返回 None
-        """
-        with self.session_scope() as session:
-            return session.query(DoubanBook).filter(
-                DoubanBook.douban_id == douban_id).first()
 
     def get_book_by_title_author(self, title: str,
                                  author: str) -> Optional[DoubanBook]:
@@ -356,40 +318,6 @@ class Database:
             else:
                 self.logger.warning(f"尝试更新不存在的Z-Library书籍: ID {book_id}")
 
-    def get_best_zlibrary_book(self, douban_id: str, format_priority: List[str] = None) -> Optional[ZLibraryBook]:
-        """
-        根据优先级获取最佳的Z-Library书籍
-        
-        Args:
-            douban_id: 豆瓣书籍ID
-            format_priority: 格式优先级列表，例如 ['epub', 'mobi', 'pdf']
-            
-        Returns:
-            Optional[ZLibraryBook]: 最佳匹配的Z-Library书籍对象
-        """
-        with self.session_scope() as session:
-            books = session.query(ZLibraryBook).filter(
-                ZLibraryBook.douban_id == douban_id,
-                ZLibraryBook.is_available == True
-            ).all()
-            
-            if not books:
-                return None
-            
-            # 如果有格式优先级，按优先级排序
-            if format_priority:
-                def format_priority_score(book):
-                    try:
-                        return format_priority.index(book.file_format.lower())
-                    except (ValueError, AttributeError):
-                        return len(format_priority)  # 未知格式排在最后
-                
-                books.sort(key=format_priority_score)
-            
-            # 按质量评分排序（如果有的话）
-            books.sort(key=lambda x: x.quality_score or 0, reverse=True)
-            
-            return books[0]
 
     # BookStatusHistory 相关操作
     def add_status_history(self, book_id: int, old_status: Optional[BookStatus], 
