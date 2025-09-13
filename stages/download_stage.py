@@ -85,7 +85,11 @@ class DownloadStage(BaseStage):
                 limits = self.zlibrary_service.get_download_limits()
                 reset_time = limits.get('daily_reset', '未知')
                 self.logger.warning(f"Z-Library下载次数不足，暂停下载阶段，重置时间: {reset_time}")
-                self.logger.warning(f"下载限制耗尽，保持书籍在原状态: {book.title}, 重置时间: {reset_time}")
+                
+                # 回退所有下载相关状态的书籍到搜索完成状态
+                rollback_count = self.state_manager.rollback_download_tasks_when_limit_exhausted(reset_time)
+                self.logger.info(f"下载次数不足，已回退 {rollback_count} 本书籍状态到搜索完成")
+                
                 # 不抛出异常，而是返回False表示无法处理，让系统保持当前状态
                 return False
             
@@ -113,7 +117,11 @@ class DownloadStage(BaseStage):
                 limits = self.zlibrary_service.get_download_limits()
                 reset_time = limits.get('daily_reset', '未知')
                 self.logger.warning(f"Z-Library下载次数不足，暂停下载阶段，重置时间: {reset_time}")
-                self.logger.warning(f"下载限制耗尽，保持书籍在原状态: {book.title}, 重置时间: {reset_time}")
+                
+                # 回退所有下载相关状态的书籍到搜索完成状态
+                rollback_count = self.state_manager.rollback_download_tasks_when_limit_exhausted(reset_time)
+                self.logger.info(f"下载次数不足，已回退 {rollback_count} 本书籍状态到搜索完成")
+                
                 # 抛出非重试性异常，让任务调度器正确处理
                 raise DownloadLimitExhaustedError(
                     f"Z-Library下载次数不足，重置时间: {reset_time}", 

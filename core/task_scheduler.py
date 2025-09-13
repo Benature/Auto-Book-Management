@@ -391,6 +391,26 @@ class TaskScheduler:
         """
         # 检查是否为非重试性错误
         if exception:
+            from core.pipeline import DownloadLimitExhaustedError
+            
+            # 特殊处理下载次数不足错误
+            if isinstance(exception, DownloadLimitExhaustedError):
+                self.logger.warning(
+                    f"检测到下载次数不足错误，暂停下载相关任务: 任务ID {task.id}")
+                self._update_task_status(
+                    task.id,
+                    TaskStatus.FAILED,
+                    error_message=f"下载次数不足，已回退状态: {error_message}")
+                self._stats['total_failed'] += 1
+                
+                # 暂停所有下载阶段的任务调度
+                self._pause_download_tasks()
+                
+                self.logger.info(
+                    f"下载次数不足，任务已暂停: ID {task.id}, 状态已回退到搜索完成"
+                )
+                return
+            
             error_info = ErrorClassifier.classify_error(exception)
             if not error_info.retryable:
                 self.logger.warning(
@@ -692,3 +712,63 @@ class TaskScheduler:
             self.logger.error(
                 f"检查调度条件失败: 书籍ID {book_id}, 阶段 {stage}, 错误: {str(e)}")
             return False
+
+    def _pause_download_tasks(self):
+        """
+        暂停所有下载阶段的任务调度
+        
+        将队列中所有下载阶段的任务状态设置为取消，避免继续消耗下载次数
+        """
+        try:
+            paused_count = 0
+            
+            with self._queue_lock:
+                # 找出所有下载阶段的任务
+                download_tasks = [task for task in self._task_queue if task.stage == 'download']
+                
+                # 从队列中移除这些任务
+                self._task_queue = [task for task in self._task_queue if task.stage != 'download']
+                heapq.heapify(self._task_queue)
+                
+                # 将这些任务标记为已取消
+                for task in download_tasks:
+                    self._update_task_status(
+                        task.id, 
+                        TaskStatus.CANCELLED,
+                        error_message="下载次数不足，任务已暂停"
+                    )
+                    paused_count += 1
+                    
+            self.logger.info(f"已暂停 {paused_count} 个下载阶段任务")
+                    
+        except Exception as e:
+            self.logger.error(f"暂停下载任务失败: {str(e)}")
+
+    def resume_download_tasks_when_limit_restored(self):
+        """
+        当下载次数恢复时，恢复下载任务调度
+        
+        重新为状态为SEARCH_COMPLETE的书籍创建下载任务
+        """
+        try:
+            resumed_count = 0
+            
+            with self.state_manager.get_session() as session:
+                # 查找所有SEARCH_COMPLETE状态的书籍
+                books_ready_for_download = session.query(DoubanBook).filter(
+                    DoubanBook.status == BookStatus.SEARCH_COMPLETE
+                ).all()
+                
+                self.logger.info(f"找到 {len(books_ready_for_download)} 本准备下载的书籍")
+                
+                for book in books_ready_for_download:
+                    # 为这些书籍创建下载任务
+                    if self.schedule_task(book.id, 'download', TaskPriority.NORMAL):
+                        resumed_count += 1
+                        
+            self.logger.info(f"已恢复 {resumed_count} 个下载任务")
+            return resumed_count
+            
+        except Exception as e:
+            self.logger.error(f"恢复下载任务失败: {str(e)}")
+            return 0

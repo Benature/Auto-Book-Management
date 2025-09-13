@@ -56,12 +56,13 @@ class BookStateManager:
 
         # 下载阶段
         BookStatus.DOWNLOAD_QUEUED:
-        {BookStatus.DOWNLOAD_ACTIVE, BookStatus.FAILED_PERMANENT},
+        {BookStatus.DOWNLOAD_ACTIVE, BookStatus.FAILED_PERMANENT, BookStatus.SEARCH_COMPLETE},  # 添加回退到搜索完成状态
         BookStatus.DOWNLOAD_ACTIVE: {
             BookStatus.DOWNLOAD_COMPLETE,
             BookStatus.DOWNLOAD_FAILED,
             BookStatus.FAILED_PERMANENT,
-            BookStatus.DOWNLOAD_QUEUED  # 重试时回退
+            BookStatus.DOWNLOAD_QUEUED,  # 重试时回退
+            BookStatus.SEARCH_COMPLETE  # 下载次数不足时回退到搜索完成状态
         },
         BookStatus.DOWNLOAD_COMPLETE: {
             BookStatus.UPLOAD_QUEUED,
@@ -992,3 +993,69 @@ class BookStateManager:
             self.logger.error(f"重置超时书籍状态失败: {str(e)}")
         
         return reset_count
+
+    def rollback_download_tasks_when_limit_exhausted(self, reset_time: str = None) -> int:
+        """
+        当下载次数不足时，将所有下载相关状态的书籍回退到搜索完成状态
+        
+        Args:
+            reset_time: 下载次数重置时间
+            
+        Returns:
+            int: 回退的书籍数量
+        """
+        try:
+            rollback_count = 0
+            reason = f"下载次数不足，回退到搜索完成状态等待重置"
+            if reset_time:
+                reason += f"，重置时间: {reset_time}"
+            
+            # 定义需要回退的状态
+            rollback_statuses = [
+                BookStatus.DOWNLOAD_QUEUED,
+                BookStatus.DOWNLOAD_ACTIVE,
+                BookStatus.DOWNLOAD_FAILED
+            ]
+            
+            with self.get_session() as session:
+                # 查找所有需要回退的书籍
+                books_to_rollback = session.query(DoubanBook).filter(
+                    DoubanBook.status.in_(rollback_statuses)
+                ).all()
+                
+                self.logger.info(f"找到 {len(books_to_rollback)} 本需要回退状态的书籍")
+                
+                for book in books_to_rollback:
+                    old_status = book.status
+                    
+                    # 将状态回退到搜索完成
+                    book.status = BookStatus.SEARCH_COMPLETE
+                    book.updated_at = datetime.now()
+                    book.error_message = reason
+                    
+                    # 创建状态历史记录
+                    history = BookStatusHistory(
+                        book_id=book.id,
+                        old_status=old_status,
+                        new_status=BookStatus.SEARCH_COMPLETE,
+                        change_reason=reason,
+                        error_message=reason
+                    )
+                    
+                    session.add(book)
+                    session.add(history)
+                    
+                    rollback_count += 1
+                    self.logger.info(
+                        f"回退书籍状态: {book.title} (ID: {book.id}), "
+                        f"{old_status.value} -> {BookStatus.SEARCH_COMPLETE.value}"
+                    )
+                
+                if rollback_count > 0:
+                    self.logger.info(f"成功回退 {rollback_count} 本书籍到搜索完成状态")
+                    
+        except Exception as e:
+            self.logger.error(f"回退下载任务状态失败: {str(e)}")
+            return 0
+        
+        return rollback_count
