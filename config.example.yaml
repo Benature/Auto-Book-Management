@@ -15,7 +15,7 @@ database:
   # 数据库类型：sqlite 或 postgresql
   type: "sqlite"
   # SQLite 数据库文件路径（仅 type=sqlite 时使用）
-  path: "data/douban_books.db"
+  path: "data/books.db"
   # PostgreSQL 配置（仅 type=postgresql 时使用）
   host: "localhost"
   port: 5432
